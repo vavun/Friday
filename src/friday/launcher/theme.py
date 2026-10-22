@@ -237,4 +237,70 @@ def build_cyberpunk_qss(heading_font: str = "Rajdhani", mono_font: str = "JetBra
         background-color: #04070D;
         border: 1px solid {p.BORDER_DIM};
     }}
+
+    QScrollBar:vertical {{
+        background-color: #060A14;
+        width: 10px;
+        margin: 2px 0 2px 0;
+        border-radius: 4px;
+    }}
+
+    QScrollBar::handle:vertical {{
+        background-color: {p.BORDER_DIM};
+        min-height: 24px;
+        border-radius: 4px;
+    }}
+
+    QScrollBar::handle:vertical:hover {{
+        background-color: {p.CYAN};
+    }}
+
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+        height: 0px;
+    }}
+
+    QScrollBar:horizontal {{
+        background-color: #060A14;
+        height: 10px;
+        margin: 0 2px 0 2px;
+        border-radius: 4px;
+    }}
+
+    QScrollBar::handle:horizontal {{
+        background-color: {p.BORDER_DIM};
+        min-width: 24px;
+        border-radius: 4px;
+    }}
+
+    QScrollBar::handle:horizontal:hover {{
+        background-color: {p.CYAN};
+    }}
+
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+        width: 0px;
+    }}
+
+    QCheckBox {{
+        color: {p.TEXT_MAIN};
+        spacing: 8px;
+        min-height: 26px;
+        font-size: 13px;
+    }}
+
+    QCheckBox::indicator {{
+        width: 18px;
+        height: 18px;
+        border: 1px solid {p.BORDER_DIM};
+        background-color: {p.BG_INPUT};
+        border-radius: 3px;
+    }}
+
+    QCheckBox::indicator:hover {{
+        border: 1px solid {p.CYAN};
+    }}
+
+    QCheckBox::indicator:checked {{
+        background-color: #0A3245;
+        border: 1px solid {p.CYAN};
+    }}
     """

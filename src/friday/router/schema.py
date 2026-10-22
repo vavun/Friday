@@ -1,10 +1,10 @@
-"""Pydantic-схеми команд (контракт між роутером і навичками)."""
+"""Pydantic-схеми команд (контракт між роутером і навичками, включно з ланцюжками складених команд)."""
 
 from __future__ import annotations
 
 from typing import Any, Literal
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 SkillName = Literal[
     "window.move",
@@ -12,6 +12,8 @@ SkillName = Literal[
     "window.focus",
     "gesture.drag",
     "app.launch",
+    "file.open",
+    "file.create",
     "web.search",
     "docs.lookup",
     "text.type",
@@ -22,9 +24,10 @@ SkillName = Literal[
 
 
 class CommandIntent(BaseModel):
-    """Структурована команда, яку повертають fast-rules або LLM-парсер."""
+    """Структурована команда або послідовність команд (steps), яку повертають fast-rules або LLM-парсер."""
 
     skill: SkillName
     args: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     needs_confirm: bool = False
+    steps: list[CommandIntent] = Field(default_factory=list)

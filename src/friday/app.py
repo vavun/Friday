@@ -23,6 +23,7 @@ from friday.skills.agent_cli import AgentCliService, AgentRunSkill
 from friday.skills.apps import AppLauncher, AppLaunchSkill
 from friday.skills.base import SkillRegistry
 from friday.skills.docs_lookup import DocsLookupService, DocsLookupSkill
+from friday.skills.files import FileCreateSkill, FileOpenSkill, FileSystemService
 from friday.skills.telegram import TelegramSendSkill, TelegramService
 from friday.skills.typing_text import TextTypeSkill
 from friday.skills.web import WebBrowserService, WebSearchSkill
@@ -87,14 +88,17 @@ class FridayApp:
         reg.register(WindowMoveSkill(wm))
         reg.register(WindowResizeSkill(wm))
         reg.register(WindowFocusSkill(wm))
-        reg.register(
-            AppLaunchSkill(
-                AppLauncher(
-                    self.config.apps,
-                    custom_synonyms=self.config.app_synonyms,
-                )
-            )
+        app_launcher = AppLauncher(
+            self.config.apps,
+            custom_synonyms=self.config.app_synonyms,
         )
+        reg.register(AppLaunchSkill(app_launcher))
+        file_service = FileSystemService(
+            allowed_folders=self.config.paths.allowed_folders,
+            app_launcher=app_launcher,
+        )
+        reg.register(FileCreateSkill(file_service))
+        reg.register(FileOpenSkill(file_service))
         reg.register(TextTypeSkill())
         reg.register(WebSearchSkill(WebBrowserService(docs_sites=self.config.docs_sites)))
         reg.register(
@@ -253,14 +257,20 @@ class FridayApp:
             await self.feedback.notify("Уточніть команду", question)
             return
 
-        if should_require_confirmation(
-            intent.skill,
-            intent.needs_confirm,
-            self.config.safety,
-        ):
+        # Перевірка навичок, що вимагають підтвердження (як одиночних, так і у складі ланцюжка)
+        all_steps = intent.steps if intent.steps else [intent]
+        needs_confirm_step = next(
+            (
+                s
+                for s in all_steps
+                if should_require_confirmation(s.skill, s.needs_confirm, self.config.safety)
+            ),
+            None,
+        )
+        if needs_confirm_step is not None:
             self._pending_intent = intent
             self.transition(AssistantState.CONFIRMING)
-            prompt_msg = build_confirmation_prompt(intent.skill, intent.args)
+            prompt_msg = build_confirmation_prompt(needs_confirm_step.skill, needs_confirm_step.args)
             await self.feedback.notify(
                 "Підтвердіть дію (Enter / Esc)",
                 prompt_msg,
@@ -276,23 +286,37 @@ class FridayApp:
         intent = self._pending_intent
         self._pending_intent = None
         intent.args["_confirmed"] = True
+        if intent.steps:
+            for s in intent.steps:
+                s.args["_confirmed"] = True
         await self._execute_intent(intent)
 
     async def _execute_intent(self, intent: CommandIntent) -> None:
-        """Виконує навичку з реєстру та повертає автомат у стан IDLE."""
+        """Виконує навичку з реєстру та повертає автомат у стан IDLE (підтримує ланцюжки дій steps)."""
         self.transition(AssistantState.EXECUTING)
         try:
-            validate_intent_safety(intent.skill, intent.args)
+            steps = intent.steps if intent.steps else [intent]
+            for idx, step in enumerate(steps):
+                validate_intent_safety(step.skill, step.args)
 
-            if intent.skill == "gesture.drag" and self.registry.get("gesture.drag") is None:
-                ctrl = self._ensure_gesture_controller()
-                self.registry.register(GestureDragSkill(ctrl))
+                if step.skill == "gesture.drag" and self.registry.get("gesture.drag") is None:
+                    ctrl = self._ensure_gesture_controller()
+                    self.registry.register(GestureDragSkill(ctrl))
 
-            skill = self.registry.get(intent.skill)
-            if skill is not None:
-                await skill.execute(intent.args)
-            else:
-                log.info("Навичку '%s' розпізнано, але ще не підключено до реєстру.", intent.skill)
+                skill = self.registry.get(step.skill)
+                if skill is not None:
+                    log.info("Виконання кроку %d/%d: %s (%s)", idx + 1, len(steps), step.skill, step.args)
+                    await skill.execute(step.args)
+                    # Якщо відкрили програму/файл/сайт, а наступний крок маніпулює вікном —
+                    # даємо системі невелику паузу (0.6 с) для появи нового вікна та передачі фокусу
+                    if (
+                        len(steps) > idx + 1
+                        and step.skill in ("app.launch", "file.open", "file.create", "web.search")
+                        and steps[idx + 1].skill in ("window.move", "window.resize", "window.focus")
+                    ):
+                        await asyncio.sleep(0.6)
+                else:
+                    log.info("Навичку '%s' розпізнано, але ще не підключено до реєстру.", step.skill)
         except Exception as exc:
             log.exception("Помилка виконання навички %s: %s", intent.skill, exc)
             await self.feedback.notify(f"Помилка {intent.skill}", str(exc))

@@ -10,6 +10,11 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    import winreg
+except ImportError:
+    winreg = None  # type: ignore[assignment]
+
 
 ALLOWED_EXECUTABLE_EXTENSIONS: frozenset[str] = frozenset({".exe", ".lnk", ".bat", ".cmd", ".com"})
 
@@ -24,6 +29,8 @@ _SKIP_SHORTCUT_KEYWORDS: tuple[str, ...] = (
     "manual",
     "website",
     "license",
+    "updater",
+    "installer",
 )
 
 # MS-SHLLINK HeaderSize (0x0000004C) + LinkCLSID (00021401-0000-0000-C000-000000000046)
@@ -132,9 +139,13 @@ def parse_lnk_file(lnk_path: Path, require_target_exists: bool = False) -> Scann
     except Exception:
         return None
 
+    if len(raw_bytes) < 20 or not raw_bytes.startswith(b"\x4c\x00\x00\x00"):
+        return None
+
     target_path, args = parse_lnk_bytes(raw_bytes)
     if not target_path:
-        return None
+        # Для валідних Shell-ярликів Windows (UWP / Explorer PIDL) використовуємо сам файл .lnk
+        target_path = str(lnk_path)
 
     target_lower = Path(target_path).name.lower()
     if any(skip in target_lower for skip in _SKIP_SHORTCUT_KEYWORDS):
@@ -153,24 +164,166 @@ def parse_lnk_file(lnk_path: Path, require_target_exists: bool = False) -> Scann
     )
 
 
-def default_start_menu_dirs() -> list[Path]:
-    """Повертає стандартні каталоги меню Пуск користувача та системи Windows."""
+def default_app_shortcut_dirs() -> list[Path]:
+    """Повертає стандартні каталоги ярликів Windows: меню Пуск та Робочий стіл."""
     dirs: list[Path] = []
+    # 1. Меню Пуск (APPDATA та ProgramData)
     for env_key in ("APPDATA", "ProgramData"):
         base = os.environ.get(env_key)
         if base:
             p = Path(base) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
-            if p.exists():
+            if p.exists() and p not in dirs:
                 dirs.append(p)
+
+    # 2. Робочий стіл поточного користувача
+    home = Path.home()
+    for d in (
+        home / "Desktop",
+        home / "OneDrive" / "Desktop",
+        home / "OneDrive" / "Робочий стіл",
+        home / "Робочий стіл",
+    ):
+        if d.exists() and d not in dirs:
+            dirs.append(d)
+
+    # 3. Загальний робочий стіл (Public Desktop)
+    pub = os.environ.get("PUBLIC")
+    if pub:
+        pub_d = Path(pub) / "Desktop"
+        if pub_d.exists() and pub_d not in dirs:
+            dirs.append(pub_d)
+    alt_pub = Path(r"C:\Users\Public\Desktop")
+    if alt_pub.exists() and alt_pub not in dirs:
+        dirs.append(alt_pub)
+
     return dirs
+
+
+def default_start_menu_dirs() -> list[Path]:
+    """Сумісність зі старим API: повертає каталоги ярликів застосунків."""
+    return default_app_shortcut_dirs()
+
+
+def scan_registry_apps() -> list[ScannedApp]:
+    """Сканує системний реєстр Windows (App Paths та Uninstall) для виявлення встановлених застосунків."""
+    if winreg is None:
+        return []
+
+    apps: list[ScannedApp] = []
+    seen_paths: set[str] = set()
+
+    # 1. HKLM та HKCU \ ... \ App Paths
+    app_paths_roots = [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"),
+    ]
+    for root_key, subkey in app_paths_roots:
+        try:
+            with winreg.OpenKey(root_key, subkey) as key:
+                count = winreg.QueryInfoKey(key)[0]
+                for i in range(count):
+                    try:
+                        app_name = winreg.EnumKey(key, i)
+                        with winreg.OpenKey(key, app_name) as app_key:
+                            raw_val, _ = winreg.QueryValueEx(app_key, "")
+                            if not raw_val:
+                                continue
+                            clean_path = str(raw_val).strip("\"' ")
+                            expanded = os.path.expandvars(clean_path)
+                            p = Path(expanded)
+                            if p.exists() and p.suffix.lower() == ".exe":
+                                norm_p = str(p.resolve()).lower()
+                                if norm_p not in seen_paths:
+                                    stem = p.stem
+                                    if not any(skip in stem.lower() for skip in _SKIP_SHORTCUT_KEYWORDS):
+                                        seen_paths.add(norm_p)
+                                        apps.append(
+                                            ScannedApp(
+                                                voice_name=normalize_voice_name(stem),
+                                                display_name=stem,
+                                                exe_path=str(p.resolve()),
+                                            )
+                                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # 2. HKLM, WOW6432Node, HKCU \ ... \ Uninstall
+    uninstall_roots = [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ]
+    for root_key, subkey in uninstall_roots:
+        try:
+            with winreg.OpenKey(root_key, subkey) as key:
+                count = winreg.QueryInfoKey(key)[0]
+                for i in range(count):
+                    try:
+                        sub_name = winreg.EnumKey(key, i)
+                        with winreg.OpenKey(key, sub_name) as app_k:
+                            disp, _ = winreg.QueryValueEx(app_k, "DisplayName")
+                            if not disp or not str(disp).strip():
+                                continue
+                            disp_str = str(disp).strip()
+                            if any(skip in disp_str.lower() for skip in _SKIP_SHORTCUT_KEYWORDS):
+                                continue
+
+                            exe_candidate = ""
+                            try:
+                                icon, _ = winreg.QueryValueEx(app_k, "DisplayIcon")
+                                if icon:
+                                    clean_icon = str(icon).split(",")[0].strip("\"' ")
+                                    p_icon = Path(os.path.expandvars(clean_icon))
+                                    if p_icon.exists() and p_icon.suffix.lower() == ".exe":
+                                        exe_candidate = str(p_icon.resolve())
+                            except Exception:
+                                pass
+
+                            if not exe_candidate:
+                                try:
+                                    loc, _ = winreg.QueryValueEx(app_k, "InstallLocation")
+                                    if loc and Path(loc).is_dir():
+                                        for p_exe in Path(loc).glob("*.exe"):
+                                            p_stem = p_exe.stem.lower()
+                                            if not any(skip in p_stem for skip in _SKIP_SHORTCUT_KEYWORDS):
+                                                exe_candidate = str(p_exe.resolve())
+                                                break
+                                except Exception:
+                                    pass
+
+                            if exe_candidate:
+                                norm_cand = exe_candidate.lower()
+                                if norm_cand not in seen_paths:
+                                    p_cand = Path(norm_cand)
+                                    if not any(skip in p_cand.stem.lower() for skip in _SKIP_SHORTCUT_KEYWORDS):
+                                        seen_paths.add(norm_cand)
+                                        apps.append(
+                                            ScannedApp(
+                                                voice_name=normalize_voice_name(disp_str),
+                                                display_name=disp_str,
+                                                exe_path=exe_candidate,
+                                            )
+                                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    return apps
 
 
 def scan_start_menu_apps(
     directories: list[Path] | None = None,
     require_target_exists: bool = True,
+    include_registry: bool | None = None,
 ) -> list[ScannedApp]:
-    """Сканує каталоги меню Пуск на наявність ярликів .lnk і повертає відсортований список програм."""
-    search_dirs = directories if directories is not None else default_start_menu_dirs()
+    """Сканує меню Пуск, ярлики Робочого столу та реєстр Windows і повертає всі знайдені програми."""
+    custom_dirs = directories is not None
+    search_dirs = directories if custom_dirs else default_app_shortcut_dirs()
+    should_include_registry = not custom_dirs if include_registry is None else bool(include_registry)
+
     seen_voice_names: set[str] = set()
     seen_targets: set[str] = set()
     results: list[ScannedApp] = []
@@ -188,6 +341,15 @@ def scan_start_menu_apps(
             seen_voice_names.add(parsed.voice_name)
             seen_targets.add(norm_target)
             results.append(parsed)
+
+    if should_include_registry:
+        for reg_app in scan_registry_apps():
+            norm_target = reg_app.exe_path.lower()
+            if reg_app.voice_name in seen_voice_names or norm_target in seen_targets:
+                continue
+            seen_voice_names.add(reg_app.voice_name)
+            seen_targets.add(norm_target)
+            results.append(reg_app)
 
     results.sort(key=lambda item: item.display_name.lower())
     return results

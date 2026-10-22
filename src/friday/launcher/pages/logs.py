@@ -40,6 +40,7 @@ class LogsPage(BasePage):
                 "Ключі API та вміст буфера обміну автоматично маскуються."
             ),
             parent=parent,
+            scrollable=False,
         )
         self.log_file_path = log_file_path or (DEFAULT_LOG_DIR / "friday.log")
         self._secrets_provider = secrets_provider or (lambda: [])

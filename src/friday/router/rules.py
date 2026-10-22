@@ -1,4 +1,8 @@
-"""Fast path: детерміновані правила та регулярні вирази для україномовних голосових команд."""
+"""Fast path: детерміновані правила та регулярні вирази для україномовних голосових команд.
+
+Підтримує складні комбіновані промпти (ланцюжки дій), прямі операції з файлами/папками (file.create, file.open),
+роботу з моніторами, вікнами, програмами та введенням тексту без звернення до LLM.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,6 @@ from typing import Any
 
 from friday.router.schema import CommandIntent
 from friday.skills.apps import APP_NAME_SYNONYMS
-
 
 # Словник відмінкових форм і синонімів цільових вікон / програм
 TARGET_SYNONYMS: dict[str, str] = {
@@ -45,6 +48,9 @@ TARGET_SYNONYMS: dict[str, str] = {
     "активне вікно": "active",
     "поточне вікно": "active",
     "вікно": "active",
+    "його": "active",
+    "її": "active",
+    "це": "active",
 }
 
 MONITOR_WORDS: dict[str, int] = {
@@ -81,7 +87,24 @@ SITE_SYNONYMS: dict[str, str] = {
     "pydantic": "pydantic",
     "мдн": "mdn",
     "mdn": "mdn",
+    "гітхаб": "github",
+    "github": "github",
+    "ютуб": "youtube",
+    "ютюб": "youtube",
+    "youtube": "youtube",
+    "гугл": "google",
+    "google": "google",
+    "чатгпт": "chatgpt",
+    "chatgpt": "chatgpt",
 }
+
+# Дієслова початку самостійних дій для розбиття складених речень
+ACTION_VERBS_PATTERN = (
+    r"(?:відкри\w*|запуст\w*|старту\w*|створ\w*|перенес\w*|перекин\w*|відправ\w*|"
+    r"постав\w*|прикріп\w*|притисн\w*|розгорн\w*|збільш\w*|зменш\w*|напиш\w*|надрукуй\w*|"
+    r"введ\w*|встав\w*|знайд\w*|пошукай\w*|загугл\w*|погугл\w*|шукай\w*|перейд\w*|сфокусуй\w*|"
+    r"активуй\w*|покаж\w*|вимкн\w*|зупин\w*)"
+)
 
 
 def normalize_command_text(raw: str) -> str:
@@ -107,7 +130,6 @@ def resolve_target_name(
         return TARGET_SYNONYMS[cleaned]
     if cleaned in APP_NAME_SYNONYMS:
         return APP_NAME_SYNONYMS[cleaned]
-    # Просте усічення типових українських закінчень знахідного/родового відмінків
     for suffix in ("а", "я", "у", "ю", "і", "ї"):
         if len(cleaned) > 4 and cleaned.endswith(suffix):
             stem = cleaned[:-1]
@@ -141,35 +163,191 @@ def _extract_monitor_index(text: str, default: int = 1) -> tuple[int, bool]:
 
 def _extract_snap_mode(text: str, default: str = "maximize") -> tuple[str, bool]:
     """Визначає режим позиціонування вікна (left / right / center / maximize)."""
-    if re.search(r"\b(ліворуч|вліво|зліва|на лівий бік|на ліву половину)\b", text):
+    if re.search(r"\b(ліворуч|вліво|зліва|на лівий бік|на ліву половину|в ліву сторону|у ліву сторону)\b", text):
         return ("left", True)
-    if re.search(r"\b(праворуч|вправо|справа|на правий бік|на праву половину)\b", text):
+    if re.search(r"\b(праворуч|вправо|справа|на правий бік|на праву половину|в праву сторону|у праву сторону)\b", text):
         return ("right", True)
     if re.search(r"\b(по центру|в центр|у центрі|посередині)\b", text):
         return ("center", True)
-    if re.search(r"\b(розгорни|на весь екран|максимізуй)\b", text):
+    if re.search(r"\b(розгорни|на весь екран|максимізуй|зроби на весь екран)\b", text):
         return ("maximize", True)
     return (default, False)
 
 
-def match_fast_rule(
-    raw_text: str,
+def split_compound_commands(text: str) -> list[str]:
+    """Розбиває складений промпт на послідовні під-команди за сполучниками та дієсловами дії."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+
+    # 1. Попереднє розділення за явними послідовними маркерами (і потім, а потім, після цього, далі)
+    explicit_split = re.split(
+        r"\s*(?:[,;]\s*)?(?:і\s+потім|а\s+потім|після\s+цього|потім|далі|також)\s+",
+        raw,
+        flags=re.IGNORECASE,
+    )
+
+    segments: list[str] = []
+    for part in explicit_split:
+        part = part.strip()
+        if not part:
+            continue
+
+        # 2. Поділ на межі: (кома/крапка з комою або сполучник "і/та/й/а") безпосередньо перед дієсловом дії
+        # Або коли два дієслова дії йдуть одне за одним
+        pattern = rf"(?:[,;]\s*(?:(?:і|та|й|а)\s+)?|\s+(?:і|та|й|а)\s+|\s+)(?={ACTION_VERBS_PATTERN}\b)"
+        sub_parts = re.split(pattern, part, flags=re.IGNORECASE)
+        for sp in sub_parts:
+            sp = sp.strip().strip(",;.")
+            if sp:
+                segments.append(sp)
+
+    # Якщо розбиття дало 0 частин, повертаємо початковий рядок
+    return segments or [raw]
+
+
+def _match_single_action(
+    orig: str,
+    norm: str,
     custom_apps: dict[str, str] | None = None,
     custom_synonyms: dict[str, str] | None = None,
+    previous_target: str = "active",
 ) -> CommandIntent | None:
-    """Намагається розпізнати команду детерміновано без виклику LLM (< 2 мс)."""
-    orig = (raw_text or "").strip()
-    norm = normalize_command_text(orig)
-    if not norm:
-        return None
-
+    """Розпізнає одну неподільну дію серед усіх навичок FRIDAY."""
     # 1. Керування режимом жестів (gesture.drag)
     if re.search(r"\b(вимкн\w*|зупин\w*|закри\w*)\s+(?:режим\s+)?жест\w*", norm):
         return CommandIntent(skill="gesture.drag", args={"action": "stop"}, confidence=0.98)
     if re.search(r"\b(режим\s+жест\w*|(?:увімкн\w*|ввімкн\w*|запуст\w*|активу\w*)\s+(?:режим\s+)?жест\w*)", norm):
         return CommandIntent(skill="gesture.drag", args={"action": "start"}, confidence=0.98)
 
-    # 2. Відправка повідомлення у Telegram (telegram.send) — перевіряємо ПЕРЕД text.type
+    # 2. Створення папки або файлу (file.create)
+    m_create_folder = re.match(
+        r"^(?:створи\w*|зроби\w*)\s+(?:папку|директорію|каталог)\s+(?:під\s+назвою\s+|з\s+назвою\s+)?([^\s]+|\"[^\"]+\")"
+        r"(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|проєкті|проєкт|проекті|проект|[^\s]+))?"
+        r"(?:\s+(?:і|та|й)?\s*відкри\w*(?:\s+(?:її|його|цю\s+папку))?(?:\s+(?:в|у|через)\s+(\w+))?)?$",
+        norm,
+    )
+    if m_create_folder:
+        f_name = m_create_folder.group(1).strip("\"'")
+        loc = m_create_folder.group(2)
+        app_hint = m_create_folder.group(3)
+        return CommandIntent(
+            skill="file.create",
+            args={
+                "name": f_name,
+                "item_type": "folder",
+                "location": loc.strip() if loc else None,
+                "open_after": True if "відкри" in norm else False,
+                "app": app_hint.strip() if app_hint else None,
+            },
+            confidence=0.96,
+        )
+
+    m_create_file = re.match(
+        r"^(?:створи\w*|зроби\w*)\s+(?:новий\s+|нову\s+)?(?:(пайтон|пітон|текстовий|маркдаун|джейсон|html|css|js)\s+)?(?:файл|документ)\s+(?:під\s+назвою\s+|з\s+назвою\s+)?([^\s]+|\"[^\"]+\")"
+        r"(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|проєкті|проєкт|проекті|проект|[^\s]+))?"
+        r"(?:\s+(?:і|та|й)?\s*відкри\w*(?:\s+(?:його|її|цей\s+файл))?(?:\s+(?:в|у|через)\s+(\w+))?)?$",
+        norm,
+    )
+    if m_create_file:
+        kind = m_create_file.group(1)
+        f_name = m_create_file.group(2).strip("\"'")
+        loc = m_create_file.group(3)
+        app_hint = m_create_file.group(4)
+        return CommandIntent(
+            skill="file.create",
+            args={
+                "name": f_name,
+                "item_type": "file",
+                "file_kind": kind.strip() if kind else None,
+                "location": loc.strip() if loc else None,
+                "open_after": True if "відкри" in norm else False,
+                "app": app_hint.strip() if app_hint else None,
+            },
+            confidence=0.96,
+        )
+
+    # 3. Відкриття папки або файлу (file.open)
+    m_open_dir = re.match(
+        r"^(?:відкри\w*|покажи)\s+(?:папку|директорію|каталог)\s+(.+?)(?:\s+(?:в|у|через)\s+(\w+))?$",
+        norm,
+    )
+    if m_open_dir:
+        t_name = m_open_dir.group(1).strip()
+        app_hint = m_open_dir.group(2)
+        return CommandIntent(
+            skill="file.open",
+            args={
+                "target": t_name,
+                "prefer_dir": True,
+                "app": app_hint.strip() if app_hint else None,
+            },
+            confidence=0.96,
+        )
+
+    m_open_file = None
+    if "документаці" not in norm:
+        m_open_file = re.match(
+            r"^(?:відкри\w*|покажи)\s+(?:файл\w*|документ(?:а|у|ом|і)?)\s+(.+?)(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|[^\s]+))?(?:\s+(?:в|у|через)\s+(\w+))?$",
+            norm,
+        )
+        if not m_open_file:
+            # Відкриття файлу з розширенням без обов'язкового слова "файл": наприклад "відкрий script.py в блокноті"
+            m_open_file = re.match(
+                r"^(?:відкри\w*|покажи)\s+([a-zA-Z0-9_\-а-яіїєґ]+\.[a-zA-Z0-9]+)(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи))?(?:\s+(?:в|у|через)\s+(\w+))?$",
+                norm,
+            )
+    if m_open_file:
+        f_name = m_open_file.group(1).strip()
+        loc = m_open_file.group(2)
+        app_hint = m_open_file.group(3)
+        return CommandIntent(
+            skill="file.open",
+            args={
+                "target": f_name,
+                "location": loc.strip() if loc else None,
+                "prefer_dir": False,
+                "app": app_hint.strip() if app_hint else None,
+            },
+            confidence=0.96,
+        )
+
+    # Відкриття раніше згаданого / створеного файлу у програмі (наприклад: "і відкрий в блокноті", "відкрий його в коді")
+    m_open_prev = re.match(
+        r"^(?:відкри\w*|покажи)\s*(?:його|її|цей\s+файл|цю\s+папку)?\s+(?:в|у|через)\s+(\w+)$",
+        norm,
+    )
+    if m_open_prev:
+        app_hint = m_open_prev.group(1).strip()
+        return CommandIntent(
+            skill="file.open",
+            args={
+                "target": previous_target if previous_target and previous_target != "active" else "останній",
+                "prefer_dir": False,
+                "app": app_hint,
+            },
+            confidence=0.96,
+        )
+
+    # Пряме відкриття системних папок: "відкрий робочий стіл", "відкрий завантаження", "відкрий документи", "відкрий проєкт"
+    m_known_dir = re.match(
+        r"^(?:відкри\w*|покажи)\s+(робочий\s+стіл|десктоп|завантаження|документи|проєкт|проект|папку\s+проєкту|папку\s+проекту)(?:\s+(?:в|у|через)\s+(\w+))?$",
+        norm,
+    )
+    if m_known_dir:
+        t_name = m_known_dir.group(1).strip()
+        app_hint = m_known_dir.group(2)
+        return CommandIntent(
+            skill="file.open",
+            args={
+                "target": t_name,
+                "prefer_dir": True,
+                "app": app_hint.strip() if app_hint else None,
+            },
+            confidence=0.97,
+        )
+
+    # 4. Відправка повідомлення у Telegram (telegram.send)
     m_tg = re.match(
         r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+([а-яіїєґa-z0-9_]+(?:\s+[а-яіїєґa-z0-9_]+){0,2})\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s*(?:що|про те що|:)?\s*(.+)$",
         norm,
@@ -190,7 +368,21 @@ def match_fast_rule(
                 needs_confirm=True,
             )
 
-    # 3. Введення тексту в активне поле (text.type)
+    # 5. Відкриття конкретного сайту (web.search direct site)
+    m_site = re.match(
+        r"^(?:відкри\w*|перейди\s+на)\s+(?:сторінку|сайт|веб-сайт)?\s*(youtube|ютуб|ютюб|github|гітхаб|google|гугл|chatgpt|чат\s*гпт|пошту|gmail|mail)$",
+        norm,
+    )
+    if m_site:
+        site_raw = m_site.group(1).replace(" ", "")
+        canon_site = SITE_SYNONYMS.get(site_raw, site_raw)
+        return CommandIntent(
+            skill="web.search",
+            args={"open_site": canon_site, "query": canon_site},
+            confidence=0.97,
+        )
+
+    # 6. Введення тексту в активне поле (text.type)
     m_type_orig = re.match(
         r"^(?:напиши|надрукуй|введи(?:\s+текст)?|встав(?:\s+текст)?)\s*[:\-]?\s+(.+)$",
         orig,
@@ -198,7 +390,6 @@ def match_fast_rule(
     )
     if m_type_orig and not re.search(r"\b(в|у)\s+(телеграм\w*|тг|telegram)\b", norm):
         payload = m_type_orig.group(1).strip()
-        # Не перехоплюємо агентські команди типу "напиши скрипт / функцію / тест"
         if not re.match(r"^(скрипт|функцію|клас|тест|код|програму)\b", payload.lower()):
             return CommandIntent(
                 skill="text.type",
@@ -206,7 +397,7 @@ def match_fast_rule(
                 confidence=0.96,
             )
 
-    # 4. Документація за помилкою (docs.lookup)
+    # 7. Документація за помилкою (docs.lookup)
     if re.search(r"\b(документац\w*|поясни\s+помил[кц]\w*|розбери\s+помил[кц]\w*)\b", norm) and re.search(
         r"\b(помил[кц]\w*|error|exception|traceback|буфер\w*)\b", norm
     ):
@@ -216,7 +407,7 @@ def match_fast_rule(
             args_doc["error"] = err_match.group(1)
         return CommandIntent(skill="docs.lookup", args=args_doc, confidence=0.96)
 
-    # 5. Пошук у Google / на сайтах документації (web.search)
+    # 8. Пошук у Google / на сайтах документації (web.search)
     m_web = re.match(
         r"^(?:знайди\s+(?:в|у)\s+(?:гугл\w*|google|інтернет\w*|мереж\w*)|пошукай\s+(?:в|у)\s+(?:гугл\w*|google|інтернет\w*)|загугли|погугли|шукай)\s+(.+)$",
         orig,
@@ -231,7 +422,7 @@ def match_fast_rule(
                 break
         return CommandIntent(skill="web.search", args=args_web, confidence=0.96)
 
-    # 6. Агентські кодерські задачі (agent.run)
+    # 9. Агентські кодерські задачі (agent.run)
     if re.match(
         r"^(?:відрефактор\w*|рефактор\w*|перепиши\s+файл|оптимізуй\s+файл|виправ\s+баг\s+у|напиши\s+(?:скрипт|функцію|клас|юніт-?тести|тести)|проаналізуй\s+код)\b",
         norm,
@@ -243,13 +434,14 @@ def match_fast_rule(
             needs_confirm=True,
         )
 
-    # 7. Переміщення вікна між моніторами або снап (window.move)
+    # 10. Переміщення вікна між моніторами або снап (window.move)
     m_move = re.match(
-        r"^(?:перенес\w*|перекин\w*|відправ\w*|переміст\w*|посун\w*|кин\w*)\s+(.+?)\s+на\s+(?:перш\w+|основн\w+|головн\w+|друг\w+|інш\w+|сусідн\w+|прав\w+|трет\w+|лів\w+|[123])\s+монітор\w*(.*)$",
+        r"^(?:перенес\w*|перекин\w*|відправ\w*|переміст\w*|посун\w*|кин\w*)\s*(.*?)\s+на\s+(?:перш\w+|основн\w+|головн\w+|друг\w+|інш\w+|сусідн\w+|прав\w+|трет\w+|лів\w+|[123])\s+монітор\w*(.*)$",
         norm,
     )
     if m_move:
-        target = resolve_target_name(m_move.group(1), custom_synonyms)
+        raw_t = m_move.group(1).strip()
+        target = resolve_target_name(raw_t, custom_synonyms) if raw_t else previous_target
         monitor_idx, _ = _extract_monitor_index(norm, default=2)
         snap_mode, _ = _extract_snap_mode(m_move.group(2), default="maximize")
         return CommandIntent(
@@ -259,11 +451,12 @@ def match_fast_rule(
         )
 
     m_snap = re.match(
-        r"^(?:постав|прикріпи|притисни|розмісти|перемісти|зсунь)\s+(.+?)\s+(ліворуч|вліво|зліва|на лівий бік|на ліву половину|праворуч|вправо|справа|на правий бік|на праву половину|по центру|в центр|у центрі|посередині)(.*)$",
+        r"^(?:постав\w*|прикріп\w*|притисн\w*|розміст\w*|переміст\w*|зсунь)\s*(.*?)\s*(?:в|у|на)?\s*(ліворуч|вліво|зліва|на лівий бік|на ліву половину|в ліву сторону|праворуч|вправо|справа|на правий бік|на праву половину|в праву сторону|по центру|в центр|у центрі|посередині)(.*)$",
         norm,
     )
     if m_snap:
-        target = resolve_target_name(m_snap.group(1), custom_synonyms)
+        raw_t = m_snap.group(1).strip()
+        target = resolve_target_name(raw_t, custom_synonyms) if raw_t else previous_target
         snap_mode, _ = _extract_snap_mode(m_snap.group(2), default="center")
         monitor_idx, _ = _extract_monitor_index(m_snap.group(3), default=1)
         return CommandIntent(
@@ -272,7 +465,7 @@ def match_fast_rule(
             confidence=0.95,
         )
 
-    # 8. Зміна розміру вікна (window.resize)
+    # 11. Зміна розміру вікна (window.resize)
     m_resize = re.match(
         r"^(збільш\w*|зменш\w*|розгорн\w*|максимізу\w*|віднов\w*|нормалізу\w*)\s*(.*)$",
         norm,
@@ -280,7 +473,6 @@ def match_fast_rule(
     if m_resize:
         verb = m_resize.group(1)
         rest_target = m_resize.group(2).strip()
-        # Переконуємось, що це не "розгорни на другому моніторі" з переміщенням
         if verb.startswith("збільш"):
             mode = "bigger"
         elif verb.startswith("зменш"):
@@ -290,14 +482,14 @@ def match_fast_rule(
         else:
             mode = "restore"
 
-        target = resolve_target_name(rest_target, custom_synonyms) if rest_target else "active"
+        target = resolve_target_name(rest_target, custom_synonyms) if rest_target else previous_target
         return CommandIntent(
             skill="window.resize",
             args={"target": target, "mode": mode},
             confidence=0.96,
         )
 
-    # 9. Фокус на вікні (window.focus)
+    # 12. Фокус на вікні (window.focus)
     m_focus = re.match(
         r"^(?:перейди\s+(?:в|у|до)|переключись\s+на|перемкнись\s+на|сфокусуй(?:ся\s+на)?|активуй\s+вікно|покажи\s+вікно)\s+(.+)$",
         norm,
@@ -310,7 +502,7 @@ def match_fast_rule(
             confidence=0.96,
         )
 
-    # 10. Запуск програми з білого списку (app.launch)
+    # 13. Запуск програми з білого списку (app.launch)
     m_launch = re.match(r"^(?:відкри\w*|запуст\w*|старту\w*|увімкн\w*|ввімкн\w*|включ\w*)\s+(.+)$", norm)
     if m_launch:
         raw_app = m_launch.group(1).strip()
@@ -326,3 +518,54 @@ def match_fast_rule(
             )
 
     return None
+
+
+def match_fast_rule(
+    raw_text: str,
+    custom_apps: dict[str, str] | None = None,
+    custom_synonyms: dict[str, str] | None = None,
+) -> CommandIntent | None:
+    """Розпізнає одиночну або складену (ланцюжок дій) команду детерміновано без виклику LLM."""
+    orig = (raw_text or "").strip()
+    norm = normalize_command_text(orig)
+    if not norm:
+        return None
+
+    # 1. Перевіряємо, чи фраза містить кілька складених дій
+    segments = split_compound_commands(orig)
+    if len(segments) <= 1:
+        return _match_single_action(orig, norm, custom_apps, custom_synonyms)
+
+    intents: list[CommandIntent] = []
+    prev_target = "active"
+    for seg in segments:
+        seg_norm = normalize_command_text(seg)
+        intent = _match_single_action(
+            seg,
+            seg_norm,
+            custom_apps=custom_apps,
+            custom_synonyms=custom_synonyms,
+            previous_target=prev_target,
+        )
+        if intent is None:
+            # Якщо хоча б один сегмент не впізнано детерміновано — віддаємо весь запит у Smart path LLM
+            return None
+
+        # Оновлюємо ціль для наступних кроків у ланцюжку (наприклад: відкрили браузер -> перенесли його)
+        if intent.skill in ("app.launch", "file.open", "file.create", "web.search"):
+            prev_target = str(intent.args.get("name") or intent.args.get("target") or "active")
+
+        intents.append(intent)
+
+    # Якщо всі кроки ланцюжка успішно розпізнані
+    if not intents:
+        return None
+
+    first = intents[0]
+    return CommandIntent(
+        skill=first.skill,
+        args=first.args,
+        confidence=min(i.confidence for i in intents),
+        needs_confirm=any(i.needs_confirm for i in intents),
+        steps=intents,
+    )

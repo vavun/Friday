@@ -18,7 +18,17 @@ DEFAULT_DOCS_SITES: dict[str, str] = {
     "pydantic": "docs.pydantic.dev",
     "mdn": "developer.mozilla.org",
     "github": "github.com",
+    "гітхаб": "github.com",
     "stackoverflow": "stackoverflow.com",
+    "youtube": "youtube.com",
+    "ютуб": "youtube.com",
+    "ютюб": "youtube.com",
+    "google": "google.com",
+    "гугл": "google.com",
+    "chatgpt": "chatgpt.com",
+    "чат гпт": "chatgpt.com",
+    "gmail": "mail.google.com",
+    "пошта": "mail.google.com",
 }
 
 
@@ -94,6 +104,9 @@ class WebSearchSkill:
         self.service = service or WebBrowserService()
 
     async def execute(self, args: dict[str, Any]) -> dict[str, Any]:
+        open_site = args.get("open_site")
+        if open_site:
+            return await asyncio.to_thread(self.service.open_site_sync, str(open_site).strip())
         query = str(args.get("query", "")).strip()
         site = args.get("site")
         site_str = str(site).strip() if site else None

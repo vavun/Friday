@@ -6,7 +6,7 @@ import math
 
 from PySide6.QtCore import QPointF, Qt, QTimer
 from PySide6.QtGui import QColor, QHideEvent, QPainter, QPaintEvent, QPen, QRadialGradient, QShowEvent
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QVBoxLayout, QWidget
 
 from friday.launcher.theme import CyberPalette
 
@@ -127,14 +127,43 @@ def make_cyber_card(title: str, subtitle: str = "") -> tuple[QFrame, QVBoxLayout
 
 
 class BasePage(QWidget):
-    """Базова сторінка лаунчера з заголовком у техно-шрифті."""
+    """Базова сторінка лаунчера з заголовком у техно-шрифті та плавною вертикальною прокруткою."""
 
-    def __init__(self, page_id: str, title: str, subtitle: str = "", parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        page_id: str,
+        title: str,
+        subtitle: str = "",
+        parent: QWidget | None = None,
+        scrollable: bool = True,
+    ) -> None:
         super().__init__(parent)
         self.page_id = page_id
-        self.root_layout = QVBoxLayout(self)
-        self.root_layout.setContentsMargins(24, 20, 24, 20)
-        self.root_layout.setSpacing(14)
+
+        if scrollable:
+            outer = QVBoxLayout(self)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+
+            self.scroll_area = QScrollArea(self)
+            self.scroll_area.setWidgetResizable(True)
+            self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+            self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+            self.content_widget = QWidget()
+            self.content_widget.setObjectName("PageContent")
+            self.content_widget.setStyleSheet("QWidget#PageContent { background: transparent; }")
+            self.root_layout = QVBoxLayout(self.content_widget)
+            self.root_layout.setContentsMargins(24, 20, 24, 20)
+            self.root_layout.setSpacing(14)
+
+            self.scroll_area.setWidget(self.content_widget)
+            outer.addWidget(self.scroll_area)
+        else:
+            self.root_layout = QVBoxLayout(self)
+            self.root_layout.setContentsMargins(24, 20, 24, 20)
+            self.root_layout.setSpacing(14)
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName("PageTitle")

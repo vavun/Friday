@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -115,33 +116,61 @@ class AppsPage(BasePage):
 
         self.root_layout.addWidget(manual_card)
 
-        # --- Картка 2: Сканер меню Пуск (.lnk) ---
+        # --- Картка 2: Сканер встановлених програм (меню Пуск, Десктоп, Реєстр) ---
         scan_card, scan_layout = make_cyber_card(
-            "СКАНЕР МЕНЮ ПУСК (.LNK)",
-            "Автоматичний розбір ярликів меню Пуск Windows із можливістю обрати потрібні програми чекбоксами.",
+            "СКАНЕР ВСТАНОВЛЕНИХ ПРОГРАМ (МЕНЮ ПУСК, ДЕСКТОП, РЕЄСТР)",
+            "Автоматичний пошук усіх встановлених на комп'ютері програм із можливістю швидкого вибору чекбоксами та фільтрації.",
         )
         scan_btn_row = QHBoxLayout()
-        self.btn_scan = QPushButton("Сканувати меню Пуск")
+        self.btn_scan = QPushButton("🔍 Сканувати програми")
         self.btn_scan.clicked.connect(self.start_scan)
+
+        self.btn_select_all = QPushButton("Вибрати всі")
+        self.btn_select_all.setEnabled(False)
+        self.btn_select_all.clicked.connect(lambda: self.select_all_scanned(True))
+
+        self.btn_deselect_all = QPushButton("Зняти вибір")
+        self.btn_deselect_all.setEnabled(False)
+        self.btn_deselect_all.clicked.connect(lambda: self.select_all_scanned(False))
 
         self.btn_import_checked = QPushButton("Додати вибрані програми")
         self.btn_import_checked.setObjectName("PrimaryButton")
         self.btn_import_checked.setEnabled(False)
         self.btn_import_checked.clicked.connect(self.import_checked_scanned_apps)
 
-        self.lbl_scan_status = QLabel("Натисніть «Сканувати меню Пуск», щоб знайти встановлені програми.")
+        self.lbl_scan_status = QLabel("Натисніть «Сканувати програми», щоб знайти встановлені застосунки.")
         self.lbl_scan_status.setObjectName("MutedText")
 
         scan_btn_row.addWidget(self.btn_scan)
+        scan_btn_row.addWidget(self.btn_select_all)
+        scan_btn_row.addWidget(self.btn_deselect_all)
         scan_btn_row.addWidget(self.btn_import_checked)
         scan_btn_row.addWidget(self.lbl_scan_status, stretch=1)
         scan_layout.addLayout(scan_btn_row)
 
+        self.search_filter = QLineEdit()
+        self.search_filter.setPlaceholderText("🔍 Швидкий фільтр / пошук програми за назвою або шляхом...")
+        self.search_filter.textChanged.connect(self._filter_scan_results)
+        self.search_filter.setEnabled(False)
+        scan_layout.addWidget(self.search_filter)
+
+        self.scan_scroll_area = QScrollArea()
+        self.scan_scroll_area.setWidgetResizable(True)
+        self.scan_scroll_area.setMinimumHeight(200)
+        self.scan_scroll_area.setMaximumHeight(340)
+        self.scan_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scan_scroll_area.setStyleSheet(
+            "QScrollArea { background-color: #080D18; border: 1px solid #182946; border-radius: 4px; }"
+        )
+
         self.scan_results_container = QWidget()
+        self.scan_results_container.setObjectName("ScanResultsContainer")
+        self.scan_results_container.setStyleSheet("QWidget#ScanResultsContainer { background-color: transparent; }")
         self.scan_results_layout = QVBoxLayout(self.scan_results_container)
-        self.scan_results_layout.setContentsMargins(0, 4, 0, 0)
-        self.scan_results_layout.setSpacing(4)
-        scan_layout.addWidget(self.scan_results_container)
+        self.scan_results_layout.setContentsMargins(10, 8, 10, 8)
+        self.scan_results_layout.setSpacing(6)
+        self.scan_scroll_area.setWidget(self.scan_results_container)
+        scan_layout.addWidget(self.scan_scroll_area)
 
         self.root_layout.addWidget(scan_card)
 
@@ -220,9 +249,9 @@ class AppsPage(BasePage):
         return True
 
     def start_scan(self) -> None:
-        """Запускає сканування меню Пуск у фоновому потоці."""
+        """Запускає сканування встановлених програм у фоновому потоці."""
         self.btn_scan.setEnabled(False)
-        self.lbl_scan_status.setText("Сканування ярликів меню Пуск...")
+        self.lbl_scan_status.setText("Сканування ярликів меню Пуск, Робочого столу та реєстру Windows...")
         worker = StartMenuScanWorker(scanner_fn=self._scanner_fn, parent=self)
         worker.finished_scan.connect(self._on_scan_finished)
         self._scan_worker = worker
@@ -233,7 +262,7 @@ class AppsPage(BasePage):
         self.populate_scan_results(items)
 
     def populate_scan_results(self, items: list[ScannedApp]) -> None:
-        """Відображає знайдені у меню Пуск програми з чекбоксами."""
+        """Відображає всі знайдені програми з чекбоксами без будь-якого усічення."""
         while self.scan_results_layout.count():
             child = self.scan_results_layout.takeAt(0)
             if child.widget():
@@ -241,17 +270,64 @@ class AppsPage(BasePage):
         self.scan_checkboxes.clear()
 
         if not items:
-            self.lbl_scan_status.setText("Нових ярликів .lnk у меню Пуск не знайдено.")
+            self.lbl_scan_status.setText("Програм не знайдено.")
             self.btn_import_checked.setEnabled(False)
+            self.btn_select_all.setEnabled(False)
+            self.btn_deselect_all.setEnabled(False)
+            self.search_filter.setEnabled(False)
             return
 
-        self.lbl_scan_status.setText(f"Знайдено програм у меню Пуск: {len(items)}. Позначте потрібні:")
-        for app_item in items[:35]:
+        self.lbl_scan_status.setText(f"Знайдено програм: {len(items)}. Позначте потрібні:")
+        for app_item in items:
             chk = QCheckBox(f"{app_item.display_name}  [{app_item.voice_name}]  →  {app_item.exe_path}")
+            chk.setStyleSheet("QCheckBox { min-height: 24px; font-size: 13px; color: #E6F4FF; }")
+            chk.setToolTip(f"Назва: {app_item.display_name}\nГолосове ім'я: {app_item.voice_name}\nШлях: {app_item.exe_path}")
+            chk.stateChanged.connect(lambda _st: self._update_import_btn_label())
             self.scan_checkboxes.append((chk, app_item))
             self.scan_results_layout.addWidget(chk)
 
-        self.btn_import_checked.setEnabled(True)
+        self.btn_select_all.setEnabled(True)
+        self.btn_deselect_all.setEnabled(True)
+        self.search_filter.setEnabled(True)
+        self.search_filter.clear()
+        self._update_import_btn_label()
+
+    def _filter_scan_results(self, text: str) -> None:
+        """Фільтрує список програм за введеним текстом у реальному часі."""
+        q = (text or "").strip().lower()
+        visible_count = 0
+        for chk, app_item in self.scan_checkboxes:
+            if not q:
+                chk.setVisible(True)
+                visible_count += 1
+            else:
+                match = (
+                    q in app_item.display_name.lower()
+                    or q in app_item.voice_name.lower()
+                    or q in app_item.exe_path.lower()
+                )
+                chk.setVisible(match)
+                if match:
+                    visible_count += 1
+        if q:
+            self.lbl_scan_status.setText(f"Фільтр: знайдено {visible_count} з {len(self.scan_checkboxes)}:")
+
+    def select_all_scanned(self, checked: bool = True) -> None:
+        """Позначає або знімає вибір для всіх видимих у списку чекбоксів."""
+        for chk, _ in self.scan_checkboxes:
+            if not chk.isHidden():
+                chk.setChecked(checked)
+        self._update_import_btn_label()
+
+    def _update_import_btn_label(self) -> None:
+        """Оновлює напис та доступність кнопки імпорту за кількістю позначених програм."""
+        count = sum(1 for chk, _ in self.scan_checkboxes if chk.isChecked())
+        if count > 0:
+            self.btn_import_checked.setText(f"Додати вибрані програми ({count})")
+            self.btn_import_checked.setEnabled(True)
+        else:
+            self.btn_import_checked.setText("Додати вибрані програми")
+            self.btn_import_checked.setEnabled(False)
 
     def import_checked_scanned_apps(self) -> int:
         """Додає всі відмічені чекбоксами програми зі сканера у [apps]."""
@@ -275,9 +351,10 @@ class AppsPage(BasePage):
 
         self.config_store.save_local_overrides({"apps": apps_dict})
         self.refresh_apps_list()
-        self._set_feedback(f"Імпортовано програм із меню Пуск: {added}.", kind="ok")
+        self._set_feedback(f"Імпортовано програм: {added}.", kind="ok")
         if self._on_apps_changed is not None:
             self._on_apps_changed()
+        self._update_import_btn_label()
         return added
 
     def remove_app(self, app_key: str) -> None:
