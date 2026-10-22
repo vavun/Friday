@@ -1,5 +1,13 @@
 # CHANGELOG — FRIDAY
 
+## [0.3.0] — Етап 2: Розпізнавання мовлення (STT) (2026-10-22)
+
+### Додано
+- Реалізовано `friday.stt.gemini.GeminiTranscriber` (на базі `Jarvis/Server/app/stt.py`): повторне використання одного екземпляра `genai.Client`, підтримка `AudioTranscriptionConfig` (`VERBATIM` / `SMART`) та спеціалізованого україномовного промпту зі збереженням англійських технічних термінів латиницею (`FastAPI`, `pydantic`, `traceback`, `git`, `TypeError`).
+- Реалізовано `friday.stt.whisper_local.WhisperLocalTranscriber`: ліниве завантаження `faster-whisper` (`small`, `compute_type="int8"`) виключно тоді, коли обрано бекенд `whisper_local`, метод `warmup()` при старті та підказка `initial_prompt` для української мови й технічних термінів.
+- Додано фабрику `friday.stt.create_transcriber` та інтегровано стан `TRANSCRIBING` у `FridayApp` із вимірюванням повної затримки `release_to_transcript` (від відпускання клавіші до отримання тексту).
+- Додано юніт-тести `tests/test_stage2.py` (включно з набором із 10 тестових україномовних фраз із технічними термінами).
+
 ## [0.2.0] — Етап 1: Гаряча клавіша, запис звуку та зворотний зв'язок (2026-10-22)
 
 ### Додано

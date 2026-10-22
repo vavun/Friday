@@ -177,7 +177,16 @@ async def test_hold_to_talk_pipeline_and_latency(tmp_path: Path) -> None:
         beep_fn=lambda f, d: beeps.append((f, d)),
     )
 
-    app = FridayApp(config=cfg, recorder=recorder, feedback=feedback)
+    class DummyTranscriber:
+        async def transcribe(self, wav_bytes: bytes) -> str:
+            return ""
+
+    app = FridayApp(
+        config=cfg,
+        recorder=recorder,
+        feedback=feedback,
+        transcriber=DummyTranscriber(),
+    )
 
     t0 = time.perf_counter()
     await app.handle_event(HotkeyEvent(type=HotkeyEventType.VOICE_PRESS, timestamp=t0))

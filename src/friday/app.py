@@ -12,6 +12,7 @@ from friday.audio import AudioRecorder
 from friday.config import AppConfig
 from friday.feedback import FeedbackManager
 from friday.hotkeys import HotkeyEvent, HotkeyEventType, HotkeyListener
+from friday.stt import Transcriber, WhisperLocalTranscriber, create_transcriber
 
 log = logging.getLogger("friday.app")
 
@@ -28,13 +29,14 @@ class AssistantState(StrEnum):
 
 
 class FridayApp:
-    """Головний клас асистента, що керує станами, хоткеями та записом звуку."""
+    """Головний клас асистента, що керує станами, хоткеями, записом звуку та STT."""
 
     def __init__(
         self,
         config: AppConfig,
         recorder: AudioRecorder | None = None,
         feedback: FeedbackManager | None = None,
+        transcriber: Transcriber | None = None,
         listener_factory: Callable[..., HotkeyListener] | None = None,
     ) -> None:
         self.config = config
@@ -44,9 +46,11 @@ class FridayApp:
 
         self.recorder = recorder or AudioRecorder(config=config.audio)
         self.feedback = feedback or FeedbackManager()
+        self.transcriber: Transcriber = transcriber or create_transcriber(config)
         self._listener_factory = listener_factory
         self._hotkey_listener: HotkeyListener | None = None
         self._last_audio: bytes | None = None
+        self._last_transcript: str = ""
 
     @property
     def state(self) -> AssistantState:
@@ -57,6 +61,11 @@ class FridayApp:
     def last_audio(self) -> bytes | None:
         """Останній записаний WAV-буфер."""
         return self._last_audio
+
+    @property
+    def last_transcript(self) -> str:
+        """Останній розпізнаний текст команди."""
+        return self._last_transcript
 
     def transition(self, new_state: AssistantState) -> None:
         """Переводить автомат у новий стан із логуванням."""
@@ -93,10 +102,11 @@ class FridayApp:
             self.transition(AssistantState.IDLE)
 
     async def _on_voice_release(self, event: HotkeyEvent) -> None:
-        """Дозапис tail_ms після відпускання клавіші та зупинка запису."""
+        """Дозапис tail_ms після відпускання клавіші, зупинка запису та запуск STT."""
         if self._state != AssistantState.LISTENING:
             return
 
+        release_t0 = event.timestamp
         tail_s = self.config.audio.tail_ms / 1000.0
         if tail_s > 0:
             await asyncio.sleep(tail_s)
@@ -112,7 +122,26 @@ class FridayApp:
         if self.recorder.last_saved_path:
             log.info("Аудіо збережено у: %s", self.recorder.last_saved_path)
 
-        # На Етапі 2 тут буде перехід у TRANSCRIBING -> ROUTING -> EXECUTING
+        self.transition(AssistantState.TRANSCRIBING)
+        try:
+            transcript = await self.transcriber.transcribe(wav_bytes)
+        except Exception as exc:
+            log.exception("Помилка розпізнавання мовлення (STT): %s", exc)
+            self.transition(AssistantState.IDLE)
+            await self.feedback.beep_error()
+            await self.feedback.notify("Помилка STT", str(exc))
+            return
+
+        release_to_text_ms = (time.perf_counter() - release_t0) * 1000.0
+        log.info("⏱ Затримка [release_to_transcript]: %.2f мс", release_to_text_ms)
+
+        self._last_transcript = transcript.strip()
+        if not self._last_transcript:
+            log.info("Транскрипт порожній — повернення у IDLE.")
+            self.transition(AssistantState.IDLE)
+            return
+
+        # На Етапі 4 тут буде перехід у ROUTING -> EXECUTING
         self.transition(AssistantState.IDLE)
 
     async def _on_cancel(self) -> None:
@@ -125,13 +154,16 @@ class FridayApp:
             asyncio.create_task(self.feedback.beep_error())
 
     async def run(self, once: bool = False) -> None:
-        """Запускає слухач клавіш та головний цикл обробки черги подій (без polling)."""
+        """Запускає прогрів STT (для whisper_local), слухач клавіш та цикл обробки подій."""
         log.info(
             "FRIDAY запущено (стан=%s, stt=%s, hotkey=%s)",
             self._state.value,
             self.config.stt.backend,
             self.config.hotkeys.voice,
         )
+        if isinstance(self.transcriber, WhisperLocalTranscriber) and not once:
+            await self.transcriber.warmup()
+
         if once:
             log.info("Режим перевірки (--once): завершення роботи.")
             return
