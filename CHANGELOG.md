@@ -1,5 +1,23 @@
 # CHANGELOG — FRIDAY
 
+## [0.7.0] — Лаунчер (Під-етап L2): Сторінка Keys (.env), Dashboard Preflight та керування процесом ядра (2026-10-22)
+
+### Додано
+- Реалізовано `friday.launcher.services.env_store` (`EnvStore`, `mask_secret`, `ensure_env_in_gitignore`):
+  - Атомарне оновлення ключів (`GEMINI_API_KEY`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`) у `.env` без зміни коментарів, порожніх рядків та сторонніх змінних.
+  - Автоматична перевірка наявності `.env` у `.gitignore` перед першим записом із попередженням користувача, якщо `.env` довелося додати.
+  - Маскування секретів після збереження: відображаються лише останні 4 символи (`••••••••abcd`).
+- Реалізовано `friday.launcher.services.key_check` (`verify_gemini_api_key`, `KeyCheckResult`):
+  - Мінімальний тестовий запит через актуальний SDK `google-genai` (`gemini-3.5-flash-lite`, `max_output_tokens=4`) в окремому потоці `KeyCheckWorker` (`QThread`), без блокування GUI.
+  - Зрозуміла обробка помилок авторизації (`401/403`) та відсутності мережі (`offline`).
+- Реалізовано `friday.launcher.services.process_manager` (`CoreProcessManager`, `CoreProcessStatus`, `sanitize_log_line`):
+  - Запуск ядра `python -m friday` як дочірнього процесу без консольного вікна (`CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`).
+  - Автоматичне маскування секретних ключів у потоці `stdout/stderr`, захист від подвійного запуску, коректна зупинка (`terminate` -> `kill` за таймаутом), виявлення аварійного завершення (`rc != 0` -> статус `ERROR`) та перезапуск (`restart`).
+- Реалізовано `friday.launcher.services.preflight` (`run_preflight_checks`) та повні сторінки `DashboardPage` і `KeysPage`:
+  - Індикація статусу ядра (`stopped` / `starting` / `running` / `error`), кнопки `ЗАПУСТИТИ FRIDAY`, `ЗУПИНИТИ`, `ПЕРЕЗАПУСТИТИ`, синхронізовані з меню системного трею.
+  - Зведення конфігурації (активні гарячі клавіші, STT-бекенд, кількість дозволених папок і програм) та Preflight-діагностика (ключ Gemini, мікрофон через WinMM, залежності, білий список програм) із кнопками швидкого переходу `Виправити`.
+- Додано юніт- та GUI-тести `tests/test_launcher_stage2.py`.
+
 ## [0.6.0] — Лаунчер (Під-етап L1): Каркас, неонова кіберпанк-тема, навігація та `config.local.toml` (2026-10-22)
 
 ### Додано
