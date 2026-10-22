@@ -196,8 +196,16 @@ class LauncherWindow(QMainWindow):
             on_keys_saved=self.refresh_dashboard_state,
             parent=self,
         )
-        self.folders_page = FoldersPage(parent=self)
-        self.apps_page = AppsPage(parent=self)
+        self.folders_page = FoldersPage(
+            config_store=self.config_store,
+            on_folders_changed=self.refresh_dashboard_state,
+            parent=self,
+        )
+        self.apps_page = AppsPage(
+            config_store=self.config_store,
+            on_apps_changed=self.refresh_dashboard_state,
+            parent=self,
+        )
         self.voice_page = VoicePage(parent=self)
         self.monitors_page = MonitorsPage(parent=self)
         self.safety_page = SafetyPage(parent=self)

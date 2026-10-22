@@ -191,6 +191,12 @@ def load_config(
             local_data = tomllib.load(f)
         raw_data = deep_merge_dicts(raw_data, local_data)
 
+    for dict_section in ("apps", "app_synonyms"):
+        if isinstance(raw_data.get(dict_section), dict):
+            raw_data[dict_section] = {
+                k: v for k, v in raw_data[dict_section].items() if str(v).strip() != ""
+            }
+
     secrets = SecretsConfig(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         telegram_api_id=os.getenv("TELEGRAM_API_ID", ""),

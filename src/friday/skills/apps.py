@@ -39,14 +39,19 @@ class AppLauncher:
         self,
         allowed_apps: dict[str, str],
         popen_fn: Callable[..., Any] | None = None,
+        custom_synonyms: dict[str, str] | None = None,
     ) -> None:
         self.allowed_apps = {k.lower(): v for k, v in allowed_apps.items()}
         self._popen_fn = popen_fn or subprocess.Popen
+        self.synonyms: dict[str, str] = dict(APP_NAME_SYNONYMS)
+        if custom_synonyms:
+            for syn, target in custom_synonyms.items():
+                self.synonyms[syn.strip().lower()] = target.strip().lower()
 
     def resolve_app_key(self, raw_name: str) -> str:
         """Нормалізує назву програми до ключа білого списку або піднімає PermissionError."""
         cleaned = (raw_name or "").strip().lower()
-        canonical = APP_NAME_SYNONYMS.get(cleaned, cleaned)
+        canonical = self.synonyms.get(cleaned, cleaned)
         if canonical not in self.allowed_apps:
             raise PermissionError(
                 f"Програму '{raw_name}' не знайдено у білому списку [apps] config.toml "

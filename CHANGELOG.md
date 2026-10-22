@@ -1,5 +1,22 @@
 # CHANGELOG — FRIDAY
 
+## [0.8.0] — Лаунчер (Під-етап L3): Сторінки Folders (`path_rules.py`) та Apps (`app_scanner.py`) (2026-10-22)
+
+### Додано
+- Реалізовано `friday.launcher.services.path_rules` (`validate_folder_path`, `check_folder_status`, `PathValidationResult`):
+  - Нормалізація шляху (`expandvars` + `expanduser` + `resolve`).
+  - Жорстка заборона кореня диска (`C:\`), системних каталогів (`Windows`, `Program Files`, `Program Files (x86)`, `ProgramData`, `System Volume Information`, `$Recycle.Bin`), усієї домашньої директорії користувача та кореня `AppData`.
+  - Попередження (`warning`) при виборі дуже широких папок профілю (`Downloads`, `Documents`, `Desktop`, `OneDrive`) або папок першого рівня від кореня диска.
+- Реалізовано `friday.launcher.pages.folders.FoldersPage`:
+  - Додавання папки через діалог вибору (`QFileDialog.getExistingDirectory`), задання мітки та режиму доступу (`read_only` / `read_write`).
+  - Живий список дозволених папок із перевіркою статусу (`● Існує` / `▲ Недоступна`) та кнопкою `Видалити`, збереження у `[paths].allowed_folders` (`config.local.toml`).
+- Реалізовано `friday.launcher.services.app_scanner` (`parse_lnk_bytes`, `parse_lnk_file`, `scan_start_menu_apps`, `validate_app_executable`, `build_stub_lnk_bytes`):
+  - Автономний бінарний парсер ярликів Windows `.lnk` (`MS-SHLLINK` header `0x0000004C`) для сканування меню Пуск із автоматичним відсіканням деінсталяторів (`uninstall`, `unins000`) та перевіркою розширення виконуваного файлу (`.exe`, `.lnk`, `.bat`, `.cmd`, `.com`).
+- Реалізовано `friday.launcher.pages.apps.AppsPage` та розширено `friday.skills.apps.AppLauncher`:
+  - Ручне додавання програм із необов'язковими аргументами та голосовими синонімами через кому (`[apps]` + `[app_synonyms]` у `config.local.toml`).
+  - Фоновий сканер меню Пуск (`StartMenuScanWorker`) із чекбоксами для пакетного імпорту вибраних програм.
+- Додано юніт- та GUI-тести `tests/test_launcher_stage3.py`.
+
 ## [0.7.0] — Лаунчер (Під-етап L2): Сторінка Keys (.env), Dashboard Preflight та керування процесом ядра (2026-10-22)
 
 ### Додано
