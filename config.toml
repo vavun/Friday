@@ -1,7 +1,7 @@
 [hotkeys]
 voice = "right_ctrl"          # утримувати для голосової команди
 explain_clipboard = "ctrl+alt+d"   # помилка з буфера -> документація
-gesture = "ctrl+alt+g"        # утримувати (або перемикати) для режиму жестів
+gesture = "ctrl+tab"          # натиснути для вмикання/вимикання режиму жестів (toggle)
 cancel = "esc"
 
 [audio]

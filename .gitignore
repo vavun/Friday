@@ -26,7 +26,6 @@ models/*.task
 temp/
 logs/
 *.log
-requirements.txt
 
 
 # IDE

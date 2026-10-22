@@ -25,7 +25,7 @@ class HotkeysConfig(BaseModel):
 
     voice: str = "right_ctrl"
     explain_clipboard: str = "ctrl+alt+d"
-    gesture: str = "ctrl+alt+g"
+    gesture: str = "ctrl+tab"
     cancel: str = "esc"
 
 

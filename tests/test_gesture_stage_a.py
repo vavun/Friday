@@ -25,6 +25,7 @@ from friday.gesture.gestures import (
     compute_pinch_ratio,
     find_monitor_at_point,
     find_neighbor_monitor,
+    is_fist_gesture,
     map_normalized_to_virtual_desktop,
 )
 from friday.gesture.smoothing import OneEuroFilter2D
@@ -50,6 +51,47 @@ def make_synthetic_hand(
     pts[4] = Point3D(x=center_x - half, y=center_y, z=0.0)
     pts[8] = Point3D(x=center_x + half, y=center_y, z=0.0)
     return HandObservation(landmarks=tuple(pts), confidence=confidence, timestamp=timestamp)
+
+
+def make_synthetic_fist(
+    center_x: float = 0.5,
+    center_y: float = 0.5,
+    hand_size: float = 0.25,
+    confidence: float = 0.95,
+    timestamp: float = 0.0,
+) -> HandObservation:
+    """Генерує руку зі складеними у кулак пальцями (кінчики біля зап'ястя/долоні)."""
+    pts = [Point3D(x=center_x, y=center_y, z=0.0) for _ in range(21)]
+    wrist_y = center_y + hand_size
+    pts[0] = Point3D(x=center_x, y=wrist_y, z=0.0)
+    pts[9] = Point3D(x=center_x, y=center_y, z=0.0)
+    # Кінчики пальців (8, 12, 16, 20) підігнуті дуже близько до зап'ястя (d_tip < 0.05)
+    for tip_idx in (8, 12, 16, 20):
+        pts[tip_idx] = Point3D(x=center_x, y=wrist_y - 0.05, z=0.0)
+    # PIP суглоби (6, 10, 14, 18) розташовані далі від зап'ястя
+    for pip_idx in (6, 10, 14, 18):
+        pts[pip_idx] = Point3D(x=center_x, y=center_y + 0.05, z=0.0)
+    # Великий палець складений біля основи
+    pts[4] = Point3D(x=center_x + 0.02, y=center_y + 0.02, z=0.0)
+    return HandObservation(landmarks=tuple(pts), confidence=confidence, timestamp=timestamp)
+
+
+def make_synthetic_two_hands(
+    p1_center: tuple[float, float] = (0.3, 0.5),
+    p2_center: tuple[float, float] = (0.7, 0.5),
+    p1_pinch: float = 0.04,
+    p2_pinch: float = 0.04,
+    timestamp: float = 0.0,
+) -> HandObservation:
+    h1 = make_synthetic_hand(pinch_distance=p1_pinch, center_x=p1_center[0], center_y=p1_center[1], timestamp=timestamp)
+    h2 = make_synthetic_hand(pinch_distance=p2_pinch, center_x=p2_center[0], center_y=p2_center[1], timestamp=timestamp)
+    return HandObservation(
+        landmarks=h1.landmarks,
+        confidence=h1.confidence,
+        timestamp=timestamp,
+        landmarks_second=h2.landmarks,
+        confidence_second=h2.confidence,
+    )
 
 
 class ThreeMonitorFakeBackend:
@@ -86,6 +128,7 @@ class ThreeMonitorFakeBackend:
         self.window_classes: dict[int, str] = {500: "Chrome_WidgetWin_1"}
         self.elevated_hwnds: set[int] = set()
         self.rects: dict[int, Rect] = {500: Rect(100, 100, 900, 700)}
+        self.visible_windows: list[WindowEntry] | None = None
         self.show_calls: list[tuple[int, int]] = []
         self.pos_calls: list[tuple[int, int, int, int, int]] = []
 
@@ -102,7 +145,16 @@ class ThreeMonitorFakeBackend:
         return hwnd in self.elevated_hwnds
 
     def list_visible_windows(self) -> list[WindowEntry]:
+        if self.visible_windows is not None:
+            return list(self.visible_windows)
         return [WindowEntry(hwnd=500, title="Chrome", process_name="chrome.exe")]
+
+    def get_window_at_point(self, x: int, y: int) -> int:
+        for entry in self.list_visible_windows():
+            r = self.rects.get(entry.hwnd)
+            if r and r.left <= x <= r.right and r.top <= y <= r.bottom:
+                return entry.hwnd
+        return 0
 
     def get_monitors(self) -> list[MonitorInfo]:
         return self.monitors
@@ -129,6 +181,12 @@ class ThreeMonitorFakeBackend:
     def set_foreground(self, hwnd: int) -> bool:
         self.foreground_hwnd = hwnd
         return True
+
+    def close_window(self, hwnd: int) -> bool:
+        if hwnd in self.rects:
+            del self.rects[hwnd]
+            return True
+        return False
 
 
 def test_pinch_ratio_and_hysteresis_detector() -> None:
@@ -342,3 +400,241 @@ async def test_runtime_controller_camera_release_under_1s() -> None:
     assert stop_res["status"] == "stopped"
     assert stop_res["stop_ms"] < 1000.0
     assert cam.is_open is False
+
+
+def test_find_window_at_point_targets_window_under_hand_not_active() -> None:
+    """Перевіряє, що щипок захоплює не активне вікно, а те, над яким безпосередньо розташована рука."""
+    backend = ThreeMonitorFakeBackend()
+    wm = WindowManager(backend=backend)
+
+    # Вікно 500 — активне (Chrome) на координатах (100..900)
+    # Вікно 600 — неактивне фонове (Telegram) на координатах (1000..1800)
+    backend.foreground_hwnd = 500
+    backend.rects[600] = Rect(1000, 100, 1800, 700)
+    backend.window_classes[600] = "Telegram_WidgetWin_1"
+    backend.visible_windows = [
+        WindowEntry(hwnd=500, title="Google Chrome", process_name="chrome.exe"),
+        WindowEntry(hwnd=600, title="Telegram", process_name="telegram.exe"),
+    ]
+
+    # Прямий виклик wm.find_window_at_point над вікном 600 (x=1200, y=300)
+    assert wm.find_window_at_point(1200, 300) == 600
+
+    cfg = GestureConfig(
+        mode="drag",
+        hold_ms=100,
+        min_present_frames=2,
+        mirror=False,
+    )
+    mover = GestureWindowMover(config=cfg, window_manager=wm, max_setpos_hz=1000.0)
+
+    # Нормовані координати для точки (1200, 300) у віртуальному робочому просторі 3 моніторів
+    norm_x = (1200 - (-768)) / (3456 - (-768))  # 1968 / 4224 ≈ 0.4659
+    norm_y = 300 / 1366  # ≈ 0.2196
+
+    # 1. Рука зависає над вікном Telegram (600)
+    mover.process_observation(make_synthetic_hand(pinch_distance=0.15, center_x=norm_x, center_y=norm_y, timestamp=0.0))
+    # 2. Початок щипка над вікном Telegram (600)
+    mover.process_observation(make_synthetic_hand(pinch_distance=0.04, center_x=norm_x, center_y=norm_y, timestamp=0.05))
+    res_drag = mover.process_observation(make_synthetic_hand(pinch_distance=0.04, center_x=norm_x, center_y=norm_y, timestamp=0.20))
+
+    assert res_drag["state"] == "DRAGGING"
+    # Перевіряємо: захоплено саме вікно 600 (Telegram), а не активне 500 (Chrome)!
+    assert mover.active_session is not None
+    assert mover.active_session.hwnd == 600
+    assert backend.foreground_hwnd == 600  # Вікно активовано та піднято у фокус
+
+    # Позиція вікна 500 залишилась незмінною
+    assert backend.get_window_rect(500) == Rect(100, 100, 900, 700)
+
+
+def test_find_window_at_point_respects_z_order_and_skips_protected() -> None:
+    """Перевіряє дотримання Z-порядку вікон та ігнорування системних класів (Shell_TrayWnd/Progman)."""
+    backend = ThreeMonitorFakeBackend()
+    wm = WindowManager(backend=backend)
+
+    # Два вікна перекриваються: 500 та 700 мають однакові межі
+    backend.rects[700] = Rect(100, 100, 900, 700)
+    backend.window_classes[700] = "Sublime_Class"
+
+    # Якщо 700 перше у Z-порядку (передній план) -> повертає 700
+    backend.visible_windows = [
+        WindowEntry(hwnd=700, title="Sublime", process_name="sublime.exe"),
+        WindowEntry(hwnd=500, title="Chrome", process_name="chrome.exe"),
+    ]
+    assert wm.find_window_at_point(300, 300) == 700
+
+    # Якщо порядок змінюється (500 на передньому плані) -> повертає 500
+    backend.visible_windows = [
+        WindowEntry(hwnd=500, title="Chrome", process_name="chrome.exe"),
+        WindowEntry(hwnd=700, title="Sublime", process_name="sublime.exe"),
+    ]
+    assert wm.find_window_at_point(300, 300) == 500
+
+    # Перевірка ігнорування панелі завдань / робочого столу:
+    backend.rects[999] = Rect(0, 1000, 1920, 1080)
+    backend.window_classes[999] = "Shell_TrayWnd"
+    backend.visible_windows = [
+        WindowEntry(hwnd=999, title="", process_name="explorer.exe"),
+        WindowEntry(hwnd=500, title="Chrome", process_name="chrome.exe"),
+    ]
+    # У точці таскбару (500, 1050):
+    # При fallback_to_active=True повертає активне вікно (500)
+    assert wm.find_window_at_point(500, 1050, fallback_to_active=True) == 500
+    # При fallback_to_active=False генерує LookupError
+    with pytest.raises(LookupError, match="не знайдено видимого вікна"):
+        wm.find_window_at_point(500, 1050, fallback_to_active=False)
+
+
+def test_drag_resilience_to_momentary_lost_frames_and_drop() -> None:
+    """Перевіряє, що короткочасна втрата руки (1-3 кадри) не обриває перенесення, а довша (>4 кадрів) виконує Drop."""
+    cfg = GestureConfig(mode="drag", hold_ms=100, min_present_frames=2, mirror=False)
+    fsm = GestureStateMachine(cfg)
+
+    # 1. Вхід у DRAGGING
+    fsm.update(make_synthetic_hand(pinch_distance=0.15, timestamp=0.0))
+    fsm.update(make_synthetic_hand(pinch_distance=0.04, timestamp=0.05))
+    step_drag = fsm.update(make_synthetic_hand(pinch_distance=0.04, timestamp=0.16))
+    assert step_drag.state == GestureState.DRAGGING
+
+    # 2. Рука короткочасно зникає на 1-3 кадри (змазування руху, відблиск)
+    for _ in range(3):
+        step_coast = fsm.update(None)
+        assert step_coast.state == GestureState.DRAGGING  # перенесення не вибиває!
+        assert step_coast.is_pinched is True
+
+    # 3. Рука знову виявлена — перенесення гладко триває
+    step_resumed = fsm.update(make_synthetic_hand(pinch_distance=0.04, timestamp=0.30))
+    assert step_resumed.state == GestureState.DRAGGING
+
+    # 4. Якщо рука зникає надовго (> 4 кадрів) — безпечно викликається DROP
+    fsm.update(None)  # lost 1
+    fsm.update(None)  # lost 2
+    fsm.update(None)  # lost 3
+    fsm.update(None)  # lost 4
+    step_final_drop = fsm.update(None)  # lost 5 -> DROP!
+    assert step_final_drop.state == GestureState.DROP
+    assert step_final_drop.dropped is True
+
+
+def test_drag_resilience_to_pinch_jitter() -> None:
+    """Перевіряє фільтрацію випадкового 1-кадрового тремтіння щипка (на межі pinch_off)."""
+    cfg = GestureConfig(mode="drag", hold_ms=100, min_present_frames=2, mirror=False)
+    fsm = GestureStateMachine(cfg)
+
+    # Вхід у DRAGGING
+    fsm.update(make_synthetic_hand(pinch_distance=0.15, timestamp=0.0))
+    fsm.update(make_synthetic_hand(pinch_distance=0.04, timestamp=0.05))
+    fsm.update(make_synthetic_hand(pinch_distance=0.04, timestamp=0.16))
+
+    # 1 кадр із тремтінням навколо межі (ratio ≈ 0.44: відстань 0.11 при розмірі 0.25)
+    jitter_hand = make_synthetic_hand(pinch_distance=0.11, hand_size=0.25, timestamp=0.20)
+    step_jitter = fsm.update(jitter_hand)
+    # Завдяки дебаунсу 1 кадр тремтіння не скидає перенесення передчасно
+    assert step_jitter.state == GestureState.DRAGGING
+
+    # Наступний кадр пальці знову стабільно зімкнені -> перенесення продовжується
+    step_ok = fsm.update(make_synthetic_hand(pinch_distance=0.04, timestamp=0.25))
+    assert step_ok.state == GestureState.DRAGGING
+
+
+def test_is_fist_gesture_detection() -> None:
+    """Перевіряє, що функція is_fist_gesture розрізняє кулак від відкритої долоні та щипка."""
+    fist = make_synthetic_fist()
+    assert is_fist_gesture(fist.landmarks) is True
+
+    open_palm = make_synthetic_hand(pinch_distance=0.25)
+    assert is_fist_gesture(open_palm.landmarks) is False
+
+    pinch = make_synthetic_hand(pinch_distance=0.04)
+    assert is_fist_gesture(pinch.landmarks) is False
+
+
+def test_fist_gesture_closes_window() -> None:
+    """Перевіряє закриття вікна (WM_CLOSE / close_window) при утриманні та складанні руки в кулак."""
+    backend = ThreeMonitorFakeBackend()
+    wm = WindowManager(backend=backend)
+    cfg = GestureConfig(mode="drag", hold_ms=100, min_present_frames=2, mirror=False)
+    mover = GestureWindowMover(config=cfg, window_manager=wm)
+
+    # 1. Початок щипка та вхід у DRAGGING
+    mover.process_observation(make_synthetic_hand(pinch_distance=0.15, timestamp=0.0))
+    mover.process_observation(make_synthetic_hand(pinch_distance=0.04, timestamp=0.05))
+    step_drag = mover.process_observation(make_synthetic_hand(pinch_distance=0.04, timestamp=0.16))
+    assert step_drag["state"] == GestureState.DRAGGING.value
+    assert mover.active_session is not None
+    assert mover.active_session.hwnd == 500
+
+    # 2. Складаємо руку в кулак (2 кадри для підтвердження дебаунсу)
+    res1 = mover.process_observation(make_synthetic_fist(timestamp=0.20))
+    assert res1["state"] == GestureState.DRAGGING.value  # 1-й кадр підтвердження
+
+    res2 = mover.process_observation(make_synthetic_fist(timestamp=0.25))
+    assert res2["state"] == GestureState.CLOSED.value
+    assert res2["action"] == "window_close"
+    assert res2["hwnd"] == 500
+
+    # Перевіряємо: вікно закрито і видалено, сесію перенесення очищено
+    assert not backend.is_window(500)
+    assert mover.active_session is None
+
+
+def test_two_hand_pinch_resizes_and_centers_window() -> None:
+    """Перевіряє дворучний динамічний ресайз: відстань між щипками змінює розмір вікна."""
+    backend = ThreeMonitorFakeBackend()
+    wm = WindowManager(backend=backend)
+    backend.rects[500] = Rect(100, 100, 900, 700)  # 800x600
+    cfg = GestureConfig(mode="drag", hold_ms=100, min_present_frames=2, mirror=False)
+    mover = GestureWindowMover(config=cfg, window_manager=wm, max_setpos_hz=100.0)
+
+    # 1. Вхід у DRAGGING однією рукою
+    mover.process_observation(make_synthetic_hand(pinch_distance=0.15, center_x=0.4, timestamp=0.0))
+    mover.process_observation(make_synthetic_hand(pinch_distance=0.04, center_x=0.4, timestamp=0.05))
+    mover.process_observation(make_synthetic_hand(pinch_distance=0.04, center_x=0.4, timestamp=0.16))
+    assert mover.active_session is not None
+
+    # 2. Підносимо другу руку та складаємо обидва щипки (початкова відстань 0.30: 0.35..0.65)
+    two_hands_init = make_synthetic_two_hands(
+        p1_center=(0.35, 0.5),
+        p2_center=(0.65, 0.5),
+        p1_pinch=0.04,
+        p2_pinch=0.04,
+        timestamp=0.20,
+    )
+    res_init = mover.process_observation(two_hands_init)
+    assert res_init["action"] == "resize_pos"
+    assert mover._two_hand_resizing is True
+
+    # 3. Розтягуємо руки ширше (відстань 0.60: 0.20..0.80) -> розмір вікна має зрости вдвічі
+    two_hands_expand = make_synthetic_two_hands(
+        p1_center=(0.20, 0.5),
+        p2_center=(0.80, 0.5),
+        p1_pinch=0.04,
+        p2_pinch=0.04,
+        timestamp=0.25,
+    )
+    res_expand = mover.process_observation(two_hands_expand)
+    assert res_expand["action"] == "resize_pos"
+    assert res_expand["scale"] > 1.3
+    new_w, new_h = res_expand["size"]
+    assert new_w > 800
+    assert new_h > 600
+    assert backend.get_window_rect(500).width == new_w
+    assert backend.get_window_rect(500).height == new_h
+
+    # 4. Відпускаємо другу руку (розмикаємо щипок другої руки до 0.20)
+    one_hand_resumed = make_synthetic_two_hands(
+        p1_center=(0.5, 0.5),
+        p2_center=(0.8, 0.5),
+        p1_pinch=0.04,
+        p2_pinch=0.20,
+        timestamp=0.30,
+    )
+    res_single = mover.process_observation(one_hand_resumed)
+    assert res_single["action"] == "drag_pos"
+    # Після виходу з дворучного режиму вікно зберігає масштабований розмір
+    assert backend.get_window_rect(500).width == new_w
+    assert backend.get_window_rect(500).height == new_h
+
+
+

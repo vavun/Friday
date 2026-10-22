@@ -72,6 +72,8 @@ class Win32Backend(Protocol):
     def show_window(self, hwnd: int, cmd: int) -> None: ...
     def set_window_pos(self, hwnd: int, x: int, y: int, w: int, h: int) -> None: ...
     def set_foreground(self, hwnd: int) -> bool: ...
+    def get_window_at_point(self, x: int, y: int) -> int: ...
+    def close_window(self, hwnd: int) -> bool: ...
 
 
 class RealWin32Backend:
@@ -98,7 +100,7 @@ class RealWin32Backend:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             if not pid:
                 return False
-            hproc = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION, False, pid)
+            hproc = win32api.OpenProcess(win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             win32api.CloseHandle(hproc)
             return False
         except Exception:
@@ -241,6 +243,32 @@ class RealWin32Backend:
             log.warning("Не вдалося встановити фокус на HWND=%s (можливо, UIPI): %s", hwnd, exc)
             return False
 
+    def get_window_at_point(self, x: int, y: int) -> int:
+        """Повертає HWND верхньорівневого вікна у точці (x, y) через WindowFromPoint + GA_ROOT."""
+        try:
+            pt_hwnd = win32gui.WindowFromPoint((int(x), int(y)))
+            if not pt_hwnd:
+                return 0
+            root_hwnd = win32gui.GetAncestor(pt_hwnd, win32con.GA_ROOT)
+            if root_hwnd and self.is_window(root_hwnd):
+                return int(root_hwnd)
+            if self.is_window(pt_hwnd):
+                return int(pt_hwnd)
+        except Exception as exc:
+            log.debug("Помилка get_window_at_point(%d, %d): %s", x, y, exc)
+        return 0
+
+    def close_window(self, hwnd: int) -> bool:
+        """Закриває вікно надсиланням повідомлення WM_CLOSE."""
+        if not self.is_window(hwnd):
+            return False
+        try:
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+            return True
+        except Exception as exc:
+            log.warning("Не вдалося надіслати WM_CLOSE для HWND=%s: %s", hwnd, exc)
+            return False
+
 
 class WindowManager:
     """Менеджер вікон із кешем HWND, компенсацією DWM-рамок та підтримкою декількох моніторів."""
@@ -294,6 +322,60 @@ class WindowManager:
                 return entry.hwnd
 
         raise LookupError(f"Вікно для '{target}' не знайдено серед відкритих програм")
+
+    def find_window_at_point(self, x: int, y: int, fallback_to_active: bool = True) -> int:
+        """Знаходить верхньорівневе видиме вікно за координатами точки (x, y).
+
+        Спочатку намагається використати прямий Win32 hit-test (WindowFromPoint -> GA_ROOT).
+        Якщо вікно не знайдено або воно належить до системних (робочий стіл / таскбар),
+        перевіряє список видимих вікон у Z-порядку (від найвищого до найнижчого) за їхніми Rect.
+        Якщо вікно під точкою відсутнє, за умови fallback_to_active=True повертає активне вікно.
+        """
+        # 1. Прямий Win32 hit-test через бекенд (якщо підтримується)
+        if hasattr(self.backend, "get_window_at_point"):
+            try:
+                candidate = self.backend.get_window_at_point(x, y)
+                if candidate and self.backend.is_window(candidate):
+                    cls_name = self.backend.get_window_class(candidate)
+                    if cls_name not in PROTECTED_WINDOW_CLASSES:
+                        log.info(
+                            "Знайдено вікно у точці (%d, %d) через hit-test: HWND=%d (клас='%s')",
+                            x,
+                            y,
+                            candidate,
+                            cls_name,
+                        )
+                        return candidate
+            except Exception as exc:
+                log.debug("Помилка hit-test бекенду для (%d, %d): %s", x, y, exc)
+
+        # 2. Пошук серед видимих вікон у Z-порядку (від переднього плану до глибини)
+        for entry in self.backend.list_visible_windows():
+            if not self.backend.is_window(entry.hwnd):
+                continue
+            rect = self.backend.get_window_rect(entry.hwnd)
+            if rect.width <= 0 or rect.height <= 0:
+                continue
+            if rect.left <= x <= rect.right and rect.top <= y <= rect.bottom:
+                cls_name = self.backend.get_window_class(entry.hwnd)
+                if cls_name in PROTECTED_WINDOW_CLASSES:
+                    continue
+                log.info(
+                    "Знайдено вікно у точці (%d, %d) за Rect: HWND=%d, title='%s', process='%s'",
+                    x,
+                    y,
+                    entry.hwnd,
+                    entry.title,
+                    entry.process_name,
+                )
+                return entry.hwnd
+
+        # 3. Фолбек на активне вікно за потреби
+        if fallback_to_active:
+            log.info("Вікно у точці (%d, %d) не знайдено — використання активного вікна", x, y)
+            return self.find_window("active")
+
+        raise LookupError(f"У точці ({x}, {y}) не знайдено видимого вікна")
 
     def _resolve_monitor(
         self,
@@ -485,6 +567,11 @@ class WindowManager:
             raise PermissionError(
                 "Неможливо перемістити вікно: програма запущена з правами Адміністратора (UIPI)"
             )
+
+    def close_window(self, hwnd: int) -> bool:
+        """Безпечно закриває вікно через WM_CLOSE (ігноруючи системні класи)."""
+        self.validate_draggable_window(hwnd)
+        return self.backend.close_window(hwnd)
 
 
 class WindowMoveSkill:

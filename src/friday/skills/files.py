@@ -34,7 +34,7 @@ FILE_KIND_EXTENSIONS: dict[str, str] = {
     "js": ".js",
     "javascript": ".js",
     "css": ".css",
-    " bat": ".bat",
+    "bat": ".bat",
     "батник": ".bat",
 }
 
@@ -279,8 +279,8 @@ class FileSystemService:
         # VS Code / редактор коду
         if app_low in ("code", "vscode", "vs code", "код", "коді", "вс код", "редактор", "редакторі"):
             code_exe = shutil.which("code") or shutil.which("code.cmd") or "code"
-            if code_exe == "code" and "code" in self.app_launcher.whitelist:
-                code_exe = self.app_launcher.whitelist["code"]
+            if code_exe == "code" and "code" in self.app_launcher.allowed_apps:
+                code_exe = self.app_launcher.allowed_apps["code"]
             subprocess.Popen([code_exe, str(target_path)], shell=False)
             log.info("💻 Відкрито %s у VS Code", target_path)
             return f"{code_exe} {target_path}"
@@ -294,12 +294,28 @@ class FileSystemService:
             return f"explorer.exe {target_path}"
 
         # Будь-яка інша програма з білого списку [apps]
-        canonical = self.app_launcher.resolve_app_key(app_low) or APP_NAME_SYNONYMS.get(app_low, app_low)
-        if canonical in self.app_launcher.whitelist:
-            raw_cmd = os.path.expandvars(self.app_launcher.whitelist[canonical].strip().strip('"'))
-            subprocess.Popen([raw_cmd, str(target_path)], shell=False)
-            log.info("🚀 Відкрито %s у програмі %s", target_path, canonical)
-            return f"{raw_cmd} {target_path}"
+        canonical: str | None = None
+        try:
+            canonical = self.app_launcher.resolve_app_key(app_low)
+        except PermissionError:
+            syn = APP_NAME_SYNONYMS.get(app_low, app_low)
+            if syn in self.app_launcher.allowed_apps:
+                canonical = syn
+
+        if canonical and canonical in self.app_launcher.allowed_apps:
+            raw_cmd = os.path.expandvars(self.app_launcher.allowed_apps[canonical].strip())
+            if Path(raw_cmd.strip('"')).exists():
+                cmd_args = [raw_cmd.strip('"'), str(target_path)]
+            else:
+                import shlex
+
+                parts = shlex.split(raw_cmd, posix=False)
+                exe = parts[0].strip('"')
+                resolved = shutil.which(exe) or exe
+                cmd_args = [resolved, *parts[1:], str(target_path)]
+            subprocess.Popen(cmd_args, shell=False)
+            log.info("🚀 Відкрито %s у програмі %s: %s", target_path, canonical, cmd_args[0])
+            return " ".join(cmd_args)
 
         if hasattr(os, "startfile"):
             os.startfile(str(target_path))  # type: ignore[attr-defined]

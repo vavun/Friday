@@ -103,6 +103,18 @@ class FakeWin32Backend:
         self.foreground_hwnd = hwnd
         return True
 
+    def get_window_at_point(self, x: int, y: int) -> int:
+        for hwnd, r in self.rects.items():
+            if hwnd in self.valid_hwnds and r.left <= x <= r.right and r.top <= y <= r.bottom:
+                return hwnd
+        return 0
+
+    def close_window(self, hwnd: int) -> bool:
+        if hwnd in self.valid_hwnds:
+            self.valid_hwnds.remove(hwnd)
+            return True
+        return False
+
 
 def test_find_window_and_hwnd_cache_invalidation() -> None:
     """Перевіряє пошук вікна за аліасом, кешування HWND та інвалідацію через IsWindow."""

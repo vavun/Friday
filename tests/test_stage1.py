@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 from pynput import keyboard
 
 from friday.app import AssistantState, FridayApp
@@ -101,6 +102,14 @@ def test_audio_recorder_saves_valid_wav_and_caps_max_seconds(tmp_path: Path) -> 
         assert wf.getsampwidth() == 2
         assert wf.getframerate() == 16000
         assert wf.getnframes() == 16000
+
+    # Перевірка очищення temp/: створення > 10 записів має залишати щонайбільше 10
+    for i in range(12):
+        fake_file = tmp_path / f"recording_17000000000{i:02d}.wav"
+        fake_file.write_bytes(wav_bytes)
+    recorder._prune_temp_wavs(max_keep=10)
+    remaining = list(tmp_path.glob("recording_*.wav"))
+    assert len(remaining) <= 10
 
 
 def test_normalize_and_encode_wav() -> None:
@@ -202,3 +211,39 @@ async def test_hold_to_talk_pipeline_and_latency(tmp_path: Path) -> None:
     assert app.last_audio is not None
     assert (tmp_path / "latest.wav").exists()
     assert len(beeps) == 0
+
+
+@pytest.mark.asyncio
+async def test_gesture_hotkey_toggle_behavior(tmp_path: Path) -> None:
+    """Перевіряє роботу жесту в режимі перемикача (toggle) на клавіші ctrl+tab."""
+    assert parse_combo("ctrl+tab") == frozenset({"ctrl", "tab"})
+
+    cfg = AppConfig(hotkeys=HotkeysConfig(gesture="ctrl+tab"))
+    app = FridayApp(config=cfg)
+
+    # Фейковий жест-контролер для перевірки старту/зупинки
+    class FakeGestureController:
+        def __init__(self) -> None:
+            self.is_running = False
+
+        def start(self) -> None:
+            self.is_running = True
+
+        def stop(self, cancel: bool = False) -> None:
+            self.is_running = False
+
+    fake_ctrl = FakeGestureController()
+    app.gesture_controller = fake_ctrl  # type: ignore[assignment]
+
+    # Перше натискання ctrl+tab: вмикає контролер
+    await app.handle_event(HotkeyEvent(type=HotkeyEventType.GESTURE_PRESS))
+    assert fake_ctrl.is_running is True
+
+    # Відпускання клавіші: у режимі toggle контролер НЕ вимикається
+    await app.handle_event(HotkeyEvent(type=HotkeyEventType.GESTURE_RELEASE))
+    assert fake_ctrl.is_running is True
+
+    # Друге натискання ctrl+tab: вимикає контролер
+    await app.handle_event(HotkeyEvent(type=HotkeyEventType.GESTURE_PRESS))
+    assert fake_ctrl.is_running is False
+

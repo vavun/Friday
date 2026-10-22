@@ -332,14 +332,18 @@ class FridayApp:
         return self.gesture_controller
 
     async def _on_gesture_press(self) -> None:
-        """Вмикає камеру та відстеження жестів при утриманні гарячої клавіші gesture."""
+        """Перемикає стан відстеження жестів (toggle: увімкнути / вимкнути)."""
         ctrl = self._ensure_gesture_controller()
-        await asyncio.to_thread(ctrl.start)
+        if ctrl.is_running:
+            log.info("Перемикання жестів: зупинка контролера")
+            await asyncio.to_thread(ctrl.stop, False)
+        else:
+            log.info("Перемикання жестів: запуск контролера")
+            await asyncio.to_thread(ctrl.start)
 
     async def _on_gesture_release(self) -> None:
-        """Зупиняє камеру після відпускання гарячої клавіші gesture."""
-        if self.gesture_controller is not None and self.gesture_controller.is_running:
-            await asyncio.to_thread(self.gesture_controller.stop, False)
+        """У режимі toggle відпускання клавіші не зупиняє відстеження."""
+        pass
 
     async def _on_cancel(self) -> None:
         """Скасування запису, перетягування вікна або поточної дії по Esc."""
@@ -395,23 +399,17 @@ class FridayApp:
             warmup_task = asyncio.create_task(self._safe_warmup_whisper())
         try:
             while not self._stop_event.is_set():
-                queue_task = asyncio.create_task(self.event_queue.get())
-                stop_task = asyncio.create_task(self._stop_event.wait())
-                done, pending = await asyncio.wait(
-                    {queue_task, stop_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for p in pending:
-                    p.cancel()
+                try:
+                    event = await asyncio.wait_for(self.event_queue.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
 
-                if queue_task in done:
-                    event = queue_task.result()
-                    try:
-                        await self.handle_event(event)
-                    except Exception as exc:
-                        log.exception("Помилка обробки події %s: %s", event.type, exc)
-                        self.transition(AssistantState.IDLE)
-                        await self.feedback.notify("Помилка FRIDAY", str(exc))
+                try:
+                    await self.handle_event(event)
+                except Exception as exc:
+                    log.exception("Помилка обробки події %s: %s", event.type, exc)
+                    self.transition(AssistantState.IDLE)
+                    await self.feedback.notify("Помилка FRIDAY", str(exc))
         except asyncio.CancelledError:
             log.info("Отримано сигнал скасування.")
         finally:

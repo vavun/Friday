@@ -48,6 +48,11 @@ class AppLauncher:
             for syn, target in custom_synonyms.items():
                 self.synonyms[syn.strip().lower()] = target.strip().lower()
 
+    @property
+    def whitelist(self) -> dict[str, str]:
+        """Псевдонім для allowed_apps для сумісності з іншими модулями."""
+        return self.allowed_apps
+
     def resolve_app_key(self, raw_name: str) -> str:
         """Нормалізує назву програми до ключа білого списку або піднімає PermissionError."""
         cleaned = (raw_name or "").strip().lower()

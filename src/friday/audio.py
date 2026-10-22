@@ -160,10 +160,27 @@ class AudioRecorder:
             return wav_bytes
 
     def _save_temp_wav(self, wav_bytes: bytes) -> Path:
-        """Зберігає останній запис у temp/ для діагностики та перевірки."""
+        """Зберігає останній запис у temp/ для діагностики та видаляє старіші файли."""
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         path = self.temp_dir / f"recording_{int(time.time() * 1000)}.wav"
         latest = self.temp_dir / "latest.wav"
         path.write_bytes(wav_bytes)
         latest.write_bytes(wav_bytes)
+        self._prune_temp_wavs(max_keep=10)
         return path
+
+    def _prune_temp_wavs(self, max_keep: int = 10) -> None:
+        """Обмежує кількість збережених діагностичних WAV-файлів, запобігаючи переповненню диска."""
+        try:
+            recordings = sorted(
+                self.temp_dir.glob("recording_*.wav"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for old_file in recordings[max_keep:]:
+                try:
+                    old_file.unlink()
+                except Exception:
+                    pass
+        except Exception as exc:
+            log.debug("Не вдалося виконати очищення temp/: %s", exc)

@@ -61,7 +61,7 @@ def trim_traceback_text(
 def detect_library_from_text(text: str) -> str:
     """Визначає цільову бібліотеку документації за ключовими словами у traceback."""
     lower = text.lower()
-    if any(k in lower for k in ("fastapi", "starlette", "apirOuter", "httpexception", "depends(")):
+    if any(k in lower for k in ("fastapi", "starlette", "apirouter", "httpexception", "depends(")):
         return "fastapi"
     if any(
         k in lower

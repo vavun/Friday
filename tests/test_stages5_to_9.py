@@ -26,6 +26,7 @@ from friday.skills.base import SkillRegistry
 from friday.skills.docs_lookup import (
     DocsLookupService,
     DocsLookupSkill,
+    detect_library_from_text,
     parse_traceback_heuristic,
     trim_traceback_text,
 )
@@ -158,6 +159,17 @@ class _FakeDocsWin32Backend:
         self.focused_hwnds.append(hwnd)
         return True
 
+    def get_window_at_point(self, x: int, y: int) -> int:
+        for w in self.windows:
+            r = self.get_window_rect(w.hwnd)
+            if r.left <= x <= r.right and r.top <= y <= r.bottom:
+                return w.hwnd
+        return 0
+
+    def close_window(self, hwnd: int) -> bool:
+        self.windows = [w for w in self.windows if w.hwnd != hwnd]
+        return True
+
     def get_window_class(self, hwnd: int) -> str:
         return "Chrome_WidgetWin_1"
 
@@ -184,6 +196,7 @@ async def test_stage6_docs_lookup_heuristic_move_and_focus_preservation() -> Non
     assert parsed.library == "fastapi"
     assert parsed.error == "TypeError"
     assert parsed.used_llm is False
+    assert detect_library_from_text("APIRouter instance error in routes") == "fastapi"
 
     monitors = [
         MonitorInfo(index=0, handle=1, device="M1", is_primary=True, monitor_rect=Rect(0, 0, 1920, 1080), work_area=Rect(0, 0, 1920, 1040)),

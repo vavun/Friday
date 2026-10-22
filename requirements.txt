@@ -1,0 +1,26 @@
+# Core FRIDAY requirements
+pydantic>=2.0
+python-dotenv>=1.0
+pynput>=1.7
+sounddevice>=0.4
+numpy>=1.26
+google-genai>=1.0
+pywin32>=306
+pyperclip>=1.8
+winotify>=1.1
+
+# Launcher UI (PySide6)
+PySide6>=6.7
+tomli-w>=1.0
+
+# Gesture control (MediaPipe & OpenCV)
+mediapipe>=0.10.14
+opencv-python-headless>=4.10
+
+# Optional skills & features
+telethon>=1.36
+faster-whisper>=1.0
+
+# Testing
+pytest>=8.0
+pytest-asyncio>=0.23

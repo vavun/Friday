@@ -124,6 +124,24 @@ def test_file_system_service_create_and_open(tmp_path: Path) -> None:
     assert found_dir is not None
     assert found_dir.is_dir()
 
+    # 5. Створення bat-файлу (перевірка виправленого ключа "bat")
+    created_bat = service.create_item("run_task", item_type="file", location_hint="тест_папка", file_kind="bat")
+    assert created_bat.suffix == ".bat"
+
+    # 6. Відкриття файлу у дозволеній програмі з білого списку (без AttributeError: whitelist)
+    launcher = AppLauncher({"custom_editor": "custom_editor.exe --flag"})
+    assert hasattr(launcher, "whitelist")
+    assert "custom_editor" in launcher.whitelist
+
+    service_with_apps = FileSystemService(allowed_folders=allowed, app_launcher=launcher)
+    with patch("subprocess.Popen") as mock_popen:
+        cmd_result = service_with_apps.open_path(created_file, app_name="custom_editor")
+        assert "custom_editor.exe" in cmd_result
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args[0][0]
+        assert "custom_editor.exe" in call_args[0]
+        assert str(created_file) in call_args[-1]
+
 
 @pytest.mark.asyncio
 async def test_friday_app_compound_execution(tmp_path: Path) -> None:

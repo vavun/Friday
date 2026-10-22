@@ -66,12 +66,21 @@ _KEY_ALIASES: dict[str, str] = {
     "enter": "enter",
     "return": "enter",
     "space": "space",
+    "tab": "tab",
+}
+
+
+_CYRILLIC_TO_LATIN: dict[str, str] = {
+    "й": "q", "ц": "w", "у": "e", "к": "r", "е": "t", "н": "y", "г": "u", "ш": "i", "щ": "o", "з": "p",
+    "ф": "a", "і": "s", "ы": "s", "в": "d", "а": "f", "п": "g", "р": "h", "о": "j", "л": "k", "д": "l",
+    "я": "z", "ч": "x", "с": "c", "м": "v", "и": "b", "т": "n", "ь": "m",
 }
 
 
 def normalize_key_token(token: str) -> str:
     """Нормалізує текстову назву клавіші до внутрішнього канонічного токена."""
     cleaned = token.strip().lower()
+    cleaned = _CYRILLIC_TO_LATIN.get(cleaned, cleaned)
     return _KEY_ALIASES.get(cleaned, cleaned)
 
 

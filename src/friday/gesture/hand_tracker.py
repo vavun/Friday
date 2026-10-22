@@ -61,13 +61,13 @@ class HandTracker:
         options = mp_vision.HandLandmarkerOptions(
             base_options=base_options,
             running_mode=mp_vision.RunningMode.VIDEO,
-            num_hands=1,
+            num_hands=2,
             min_hand_detection_confidence=self.min_confidence,
             min_hand_presence_confidence=self.min_confidence,
             min_tracking_confidence=self.min_confidence,
         )
         self._detector = mp_vision.HandLandmarker.create_from_options(options)
-        log.info("MediaPipe HandLandmarker ініціалізовано (num_hands=1).")
+        log.info("MediaPipe HandLandmarker ініціалізовано (num_hands=2).")
         return self._detector
 
     def detect(self, rgb_frame: np.ndarray, timestamp_s: float | None = None) -> HandObservation | None:
@@ -100,10 +100,30 @@ class HandTracker:
 
         score = 1.0
         handedness_list = getattr(result, "handedness", None)
-        if handedness_list and handedness_list[0]:
+        if handedness_list and len(handedness_list) > 0 and handedness_list[0]:
             score = float(getattr(handedness_list[0][0], "score", 1.0))
 
-        return HandObservation(landmarks=points, confidence=score, timestamp=now_s)
+        # Друга рука для двохручних жестів (наприклад, динамічної зміни розміру)
+        points2: tuple[Point3D, ...] | None = None
+        score2 = 0.0
+        if len(result.hand_landmarks) > 1:
+            raw_landmarks2 = result.hand_landmarks[1]
+            points2 = tuple(
+                Point3D(x=float(lm.x), y=float(lm.y), z=float(getattr(lm, "z", 0.0)))
+                for lm in raw_landmarks2
+            )
+            if handedness_list and len(handedness_list) > 1 and handedness_list[1]:
+                score2 = float(getattr(handedness_list[1][0], "score", 1.0))
+            else:
+                score2 = score
+
+        return HandObservation(
+            landmarks=points,
+            confidence=score,
+            timestamp=now_s,
+            landmarks_second=points2,
+            confidence_second=score2,
+        )
 
     def close(self) -> None:
         """Закриває детектор MediaPipe та звільняє пам'ять."""

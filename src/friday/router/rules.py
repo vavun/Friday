@@ -106,18 +106,143 @@ ACTION_VERBS_PATTERN = (
     r"активуй\w*|покаж\w*|вимкн\w*|зупин\w*)"
 )
 
+# Попередньо скомпільовані патерни для Fast Path
+_RE_PUNCT_QUOTES = re.compile(r'["«»“”„‟]')
+_RE_PUNCT_END = re.compile(r"[!?.,;]+$")
+_RE_WHISPER_VSCODE_1 = re.compile(r"\bнівс-?код\b")
+_RE_WHISPER_VSCODE_2 = re.compile(r"\bв\s+ні\s+(?=vs|вс|код|блокнот)")
+_RE_SPACES = re.compile(r"\s+")
+_RE_CLEAN_PREFIX = re.compile(r"^(вікно|програму|застосунок)\s+")
+
+_RE_MONITOR_EXPLICIT = re.compile(
+    r"(?:на\s+)?(перш\w+|основн\w+|головн\w+|друг\w+|інш\w+|сусідн\w+|прав\w+|трет\w+|лів\w+|[123])\s+монітор\w*"
+)
+_RE_MONITOR_NUM = re.compile(r"монітор\w*\s+([123])\b")
+
+_RE_SNAP_LEFT = re.compile(r"\b(ліворуч|вліво|зліва|на лівий бік|на ліву половину|в ліву сторону|у ліву сторону)\b")
+_RE_SNAP_RIGHT = re.compile(r"\b(праворуч|вправо|справа|на правий бік|на праву половину|в праву сторону|у праву сторону)\b")
+_RE_SNAP_CENTER = re.compile(r"\b(по центру|в центр|у центрі|посередині)\b")
+_RE_SNAP_MAX = re.compile(r"\b(розгорни|на весь екран|максимізуй|зроби на весь екран)\b")
+
+_RE_EXPLICIT_SPLIT = re.compile(
+    r"\s*(?:[,;]\s*)?(?:і\s+потім|а\s+потім|після\s+цього|потім|далі|також)\s+",
+    re.IGNORECASE,
+)
+_RE_COMPOUND_BOUNDARY = re.compile(
+    rf"(?:[,;]\s*(?:(?:і|та|й|а)\s+)?|\s+(?:і|та|й|а)\s+|\s+)(?={ACTION_VERBS_PATTERN}\b)",
+    re.IGNORECASE,
+)
+
+_RE_GESTURE_STOP = re.compile(r"\b(вимкн\w*|зупин\w*|закри\w*)\s+(?:режим\s+)?жест\w*")
+_RE_GESTURE_START = re.compile(r"\b(режим\s+жест\w*|(?:увімкн\w*|ввімкн\w*|запуст\w*|активу\w*)\s+(?:режим\s+)?жест\w*)")
+
+_RE_CREATE_FOLDER = re.compile(
+    r"^(?:створи\w*|зроби\w*)\s+(?:нову\s+|новий\s+)?(?:папку|директорію|каталог)\s+(?:під\s+назвою\s+|з\s+назвою\s+)?([^\s]+|\"[^\"]+\")"
+    r"(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|проєкті|проєкт|проекті|проект|[^\s]+))?"
+    r"(?:\s+(?:і|та|й)?\s*відкри\w*(?:\s+(?:її|його|цю\s+папку))?(?:\s+(?:в|у|через)\s+(.+))?)?$"
+)
+
+_RE_CREATE_FILE = re.compile(
+    r"^(?:створи\w*|зроби\w*)\s+(?:новий\s+|нову\s+)?(?:(пайтон|пітон|текстовий|маркдаун|джейсон|html|css|js)\s+)?(?:файл|документ)\s+(?:під\s+назвою\s+|з\s+назвою\s+)?([^\s]+|\"[^\"]+\")"
+    r"(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|проєкті|проєкт|проекті|проект|[^\s]+))?"
+    r"(?:\s+(?:і|та|й)?\s*відкри\w*(?:\s+(?:його|її|цей\s+файл))?(?:\s+(?:в|у|через)\s+(\w+))?)?$"
+)
+
+_RE_OPEN_DIR = re.compile(
+    r"^(?:відкри\w*|покажи)\s+(?:папку|директорію|каталог)\s+(.+?)(?:\s+(?:в|у|через)\s+(\w+))?$"
+)
+
+_RE_OPEN_FILE_1 = re.compile(
+    r"^(?:відкри\w*|покажи)\s+(?:файл\w*|документ(?:а|у|ом|і)?)\s+(.+?)(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|[^\s]+))?(?:\s+(?:в|у|через)\s+(\w+))?$"
+)
+
+_RE_OPEN_FILE_2 = re.compile(
+    r"^(?:відкри\w*|покажи)\s+([a-zA-Z0-9_\-а-яіїєґ]+\.[a-zA-Z0-9]+)(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи))?(?:\s+(?:в|у|через)\s+(\w+))?$"
+)
+
+_RE_OPEN_PREV = re.compile(
+    r"^(?:відкри\w*|покажи)\s+(?:(?:його|її|це|цей\s+файл|цю\s+папку)\s+(?:в|у|через)\s+(.+)|(?:його|її|це|цей\s+файл|цю\s+папку)|(?:в|у|через|в\s+ній|у\s+ній)\s+(.+))$"
+)
+_RE_OPEN_PREV_PRONOUNS = re.compile(r"^(?:ній|ньому|цьому|цій)\s+")
+
+_RE_KNOWN_DIR = re.compile(
+    r"^(?:відкри\w*|покажи)\s+(робочий\s+стіл|десктоп|завантаження|документи|проєкт|проект|папку\s+проєкту|папку\s+проекту)(?:\s+(?:в|у|через)\s+(\w+))?$"
+)
+
+_RE_TG_1 = re.compile(
+    r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+([а-яіїєґa-z0-9_]+(?:\s+[а-яіїєґa-z0-9_]+){0,2})\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s*(?:що|про те що|:)?\s*(.+)$"
+)
+_RE_TG_2 = re.compile(
+    r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s+([а-яіїєґa-z0-9_]+(?:\s+[а-яіїєґa-z0-9_]+){0,1})\s*(?:що|про те що|:)\s*(.+)$"
+)
+_RE_TG_3 = re.compile(
+    r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s+([а-яіїєґa-z0-9_]+)\s+(.+)$"
+)
+
+_RE_SITE = re.compile(
+    r"^(?:відкри\w*|перейди\s+на)\s+(?:сторінку|сайт|веб-сайт)?\s*(youtube|ютуб|ютюб|github|гітхаб|google|гугл|chatgpt|чат\s*гпт|пошту|gmail|mail)$"
+)
+
+_RE_TYPE_ORIG = re.compile(
+    r"^(?:напиши|надрукуй|введи(?:\s+текст)?|встав(?:\s+текст)?)\s*[:\-]?\s+(.+)$",
+    re.IGNORECASE,
+)
+_RE_IN_TG = re.compile(r"\b(в|у)\s+(телеграм\w*|тг|telegram)\b")
+_RE_CODE_KEYWORD = re.compile(r"^(скрипт|функцію|клас|тест|код|програму)\b")
+
+_RE_DOCS_TRIGGER = re.compile(r"\b(документац\w*|поясни\s+помил[кц]\w*|розбери\s+помил[кц]\w*)\b")
+_RE_DOCS_KEYWORD = re.compile(r"\b(помил[кц]\w*|error|exception|traceback|буфер\w*)\b")
+_RE_EXCEPTION_NAME = re.compile(r"\b([A-Za-z]+(?:Error|Exception|Warning))\b")
+
+_RE_WEB = re.compile(
+    r"^(?:знайди\s+(?:в|у)\s+(?:гугл\w*|google|інтернет\w*|мереж\w*)|пошукай\s+(?:в|у)\s+(?:гугл\w*|google|інтернет\w*)|загугли|погугли|шукай)\s+(.+)$",
+    re.IGNORECASE,
+)
+
+_RE_AGENT = re.compile(
+    r"^(?:відрефактор\w*|рефактор\w*|перепиши\s+файл|оптимізуй\s+файл|виправ\s+баг\s+у|напиши\s+(?:скрипт|функцію|клас|юніт-?тести|тести)|проаналізуй\s+код)\b"
+)
+
+_RE_MOVE_EXPLICIT = re.compile(
+    r"^(?:перенес\w*|перекин\w*|відправ\w*|переміст\w*|посун\w*|кин\w*)"
+    r"(?:\s+(.*?))?"
+    r"\s+на\s+((?:перш\w+|основн\w+|головн\w+|друг\w+|інш\w+|сусідн\w+|прав\w+|трет\w+|лів\w+|[123])\s+монітор\w*)"
+    r"(?:\s+(.*))?$"
+)
+
+_RE_MOVE_BARE = re.compile(
+    r"^(?:перенес\w*|перекин\w*|відправ\w*|переміст\w*|посун\w*|кин\w*)(?:\s+(.+))?$"
+)
+_RE_MOVE_CLEAN_WORDS = re.compile(
+    r"\b(ліворуч|вліво|зліва|на лівий бік|на ліву половину|в ліву сторону|у ліву сторону|праворуч|вправо|справа|на правий бік|на праву половину|в праву сторону|у праву сторону|по центру|в центр|у центрі|посередині|розгорни|на весь екран|максимізуй)\b"
+)
+
+_RE_SNAP = re.compile(
+    r"^(?:постав\w*|прикріп\w*|притисн\w*|розміст\w*|переміст\w*|зсунь)\s*(.*?)\s*(?:в|у|на)?\s*(ліворуч|вліво|зліва|на лівий бік|на ліву половину|в ліву сторону|праворуч|вправо|справа|на правий бік|на праву половину|в праву сторону|по центру|в центр|у центрі|посередині)(.*)$"
+)
+
+_RE_RESIZE = re.compile(
+    r"^(збільш\w*|зменш\w*|розгорн\w*|максимізу\w*|віднов\w*|нормалізу\w*)\s*(.*)$"
+)
+
+_RE_FOCUS = re.compile(
+    r"^(?:перейди\s+(?:в|у|до)|переключись\s+на|перемкнись\s+на|сфокусуй(?:ся\s+на)?|активуй\s+вікно|покажи\s+вікно)\s+(.+)$"
+)
+
+_RE_LAUNCH = re.compile(r"^(?:відкри\w*|запуст\w*|старту\w*|увімкн\w*|ввімкн\w*|включ\w*)\s+(.+)$")
+
 
 def normalize_command_text(raw: str) -> str:
     """Нормалізує текст команди: нижній регістр, апострофи, лапки, виправлення типових артефактів Whisper."""
     text = (raw or "").strip()
     text = text.replace("’", "'").replace("`", "'").replace("ʼ", "'")
-    text = re.sub(r'["«»“”„‟]', "", text)
+    text = _RE_PUNCT_QUOTES.sub("", text)
     text = text.lower()
-    text = re.sub(r"[!?.,;]+$", "", text).strip()
+    text = _RE_PUNCT_END.sub("", text).strip()
     # Виправлення типових фонетичних злипань Whisper для розпізнавання технічних програм
-    text = re.sub(r"\bнівс-?код\b", "в ній vs code", text)
-    text = re.sub(r"\bв\s+ні\s+(?=vs|вс|код|блокнот)", "в ній ", text)
-    text = re.sub(r"\s+", " ", text)
+    text = _RE_WHISPER_VSCODE_1.sub("в ній vs code", text)
+    text = _RE_WHISPER_VSCODE_2.sub("в ній ", text)
+    text = _RE_SPACES.sub(" ", text)
     return text
 
 
@@ -127,7 +252,7 @@ def resolve_target_name(
 ) -> str:
     """Нормалізує назву цільового вікна або програми за словником синонімів."""
     cleaned = normalize_command_text(raw_target)
-    cleaned = re.sub(r"^(вікно|програму|застосунок)\s+", "", cleaned).strip()
+    cleaned = _RE_CLEAN_PREFIX.sub("", cleaned).strip()
     if custom_synonyms and cleaned in custom_synonyms:
         return custom_synonyms[cleaned]
     if cleaned in TARGET_SYNONYMS:
@@ -146,10 +271,7 @@ def resolve_target_name(
 
 def _extract_monitor_index(text: str, default: int = 1) -> tuple[int, bool]:
     """Шукає згадку монітора у тексті; повертає (monitor_index, found)."""
-    m = re.search(
-        r"(?:на\s+)?(перш\w+|основн\w+|головн\w+|друг\w+|інш\w+|сусідн\w+|прав\w+|трет\w+|лів\w+|[123])\s+монітор\w*",
-        text,
-    )
+    m = _RE_MONITOR_EXPLICIT.search(text)
     if m:
         word = m.group(1)
         if word in MONITOR_WORDS:
@@ -158,7 +280,7 @@ def _extract_monitor_index(text: str, default: int = 1) -> tuple[int, bool]:
             if word.startswith(key[:4]):
                 return (idx, True)
 
-    m_num = re.search(r"монітор\w*\s+([123])\b", text)
+    m_num = _RE_MONITOR_NUM.search(text)
     if m_num:
         return (int(m_num.group(1)), True)
 
@@ -167,13 +289,13 @@ def _extract_monitor_index(text: str, default: int = 1) -> tuple[int, bool]:
 
 def _extract_snap_mode(text: str, default: str = "maximize") -> tuple[str, bool]:
     """Визначає режим позиціонування вікна (left / right / center / maximize)."""
-    if re.search(r"\b(ліворуч|вліво|зліва|на лівий бік|на ліву половину|в ліву сторону|у ліву сторону)\b", text):
+    if _RE_SNAP_LEFT.search(text):
         return ("left", True)
-    if re.search(r"\b(праворуч|вправо|справа|на правий бік|на праву половину|в праву сторону|у праву сторону)\b", text):
+    if _RE_SNAP_RIGHT.search(text):
         return ("right", True)
-    if re.search(r"\b(по центру|в центр|у центрі|посередині)\b", text):
+    if _RE_SNAP_CENTER.search(text):
         return ("center", True)
-    if re.search(r"\b(розгорни|на весь екран|максимізуй|зроби на весь екран)\b", text):
+    if _RE_SNAP_MAX.search(text):
         return ("maximize", True)
     return (default, False)
 
@@ -185,11 +307,7 @@ def split_compound_commands(text: str) -> list[str]:
         return []
 
     # 1. Попереднє розділення за явними послідовними маркерами (і потім, а потім, після цього, далі)
-    explicit_split = re.split(
-        r"\s*(?:[,;]\s*)?(?:і\s+потім|а\s+потім|після\s+цього|потім|далі|також)\s+",
-        raw,
-        flags=re.IGNORECASE,
-    )
+    explicit_split = _RE_EXPLICIT_SPLIT.split(raw)
 
     segments: list[str] = []
     for part in explicit_split:
@@ -198,9 +316,7 @@ def split_compound_commands(text: str) -> list[str]:
             continue
 
         # 2. Поділ на межі: (кома/крапка з комою або сполучник "і/та/й/а") безпосередньо перед дієсловом дії
-        # Або коли два дієслова дії йдуть одне за одним
-        pattern = rf"(?:[,;]\s*(?:(?:і|та|й|а)\s+)?|\s+(?:і|та|й|а)\s+|\s+)(?={ACTION_VERBS_PATTERN}\b)"
-        sub_parts = re.split(pattern, part, flags=re.IGNORECASE)
+        sub_parts = _RE_COMPOUND_BOUNDARY.split(part)
         for sp in sub_parts:
             sp = sp.strip().strip(",;.")
             if sp:
@@ -219,18 +335,13 @@ def _match_single_action(
 ) -> CommandIntent | None:
     """Розпізнає одну неподільну дію серед усіх навичок FRIDAY."""
     # 1. Керування режимом жестів (gesture.drag)
-    if re.search(r"\b(вимкн\w*|зупин\w*|закри\w*)\s+(?:режим\s+)?жест\w*", norm):
+    if _RE_GESTURE_STOP.search(norm):
         return CommandIntent(skill="gesture.drag", args={"action": "stop"}, confidence=0.98)
-    if re.search(r"\b(режим\s+жест\w*|(?:увімкн\w*|ввімкн\w*|запуст\w*|активу\w*)\s+(?:режим\s+)?жест\w*)", norm):
+    if _RE_GESTURE_START.search(norm):
         return CommandIntent(skill="gesture.drag", args={"action": "start"}, confidence=0.98)
 
     # 2. Створення папки або файлу (file.create)
-    m_create_folder = re.match(
-        r"^(?:створи\w*|зроби\w*)\s+(?:нову\s+|новий\s+)?(?:папку|директорію|каталог)\s+(?:під\s+назвою\s+|з\s+назвою\s+)?([^\s]+|\"[^\"]+\")"
-        r"(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|проєкті|проєкт|проекті|проект|[^\s]+))?"
-        r"(?:\s+(?:і|та|й)?\s*відкри\w*(?:\s+(?:її|його|цю\s+папку))?(?:\s+(?:в|у|через)\s+(.+))?)?$",
-        norm,
-    )
+    m_create_folder = _RE_CREATE_FOLDER.match(norm)
     if m_create_folder:
         f_name = m_create_folder.group(1).strip("\"'")
         loc = m_create_folder.group(2)
@@ -247,12 +358,7 @@ def _match_single_action(
             confidence=0.96,
         )
 
-    m_create_file = re.match(
-        r"^(?:створи\w*|зроби\w*)\s+(?:новий\s+|нову\s+)?(?:(пайтон|пітон|текстовий|маркдаун|джейсон|html|css|js)\s+)?(?:файл|документ)\s+(?:під\s+назвою\s+|з\s+назвою\s+)?([^\s]+|\"[^\"]+\")"
-        r"(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|проєкті|проєкт|проекті|проект|[^\s]+))?"
-        r"(?:\s+(?:і|та|й)?\s*відкри\w*(?:\s+(?:його|її|цей\s+файл))?(?:\s+(?:в|у|через)\s+(\w+))?)?$",
-        norm,
-    )
+    m_create_file = _RE_CREATE_FILE.match(norm)
     if m_create_file:
         kind = m_create_file.group(1)
         f_name = m_create_file.group(2).strip("\"'")
@@ -272,10 +378,7 @@ def _match_single_action(
         )
 
     # 3. Відкриття папки або файлу (file.open)
-    m_open_dir = re.match(
-        r"^(?:відкри\w*|покажи)\s+(?:папку|директорію|каталог)\s+(.+?)(?:\s+(?:в|у|через)\s+(\w+))?$",
-        norm,
-    )
+    m_open_dir = _RE_OPEN_DIR.match(norm)
     if m_open_dir:
         t_name = m_open_dir.group(1).strip()
         app_hint = m_open_dir.group(2)
@@ -291,16 +394,10 @@ def _match_single_action(
 
     m_open_file = None
     if "документаці" not in norm:
-        m_open_file = re.match(
-            r"^(?:відкри\w*|покажи)\s+(?:файл\w*|документ(?:а|у|ом|і)?)\s+(.+?)(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|[^\s]+))?(?:\s+(?:в|у|через)\s+(\w+))?$",
-            norm,
-        )
+        m_open_file = _RE_OPEN_FILE_1.match(norm)
         if not m_open_file:
             # Відкриття файлу з розширенням без обов'язкового слова "файл": наприклад "відкрий script.py в блокноті"
-            m_open_file = re.match(
-                r"^(?:відкри\w*|покажи)\s+([a-zA-Z0-9_\-а-яіїєґ]+\.[a-zA-Z0-9]+)(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи))?(?:\s+(?:в|у|через)\s+(\w+))?$",
-                norm,
-            )
+            m_open_file = _RE_OPEN_FILE_2.match(norm)
     if m_open_file:
         f_name = m_open_file.group(1).strip()
         loc = m_open_file.group(2)
@@ -317,14 +414,11 @@ def _match_single_action(
         )
 
     # Відкриття раніше згаданого / створеного файлу у програмі (наприклад: "і відкрий в блокноті", "відкрий його в коді", "відкрив в ній vs code")
-    m_open_prev = re.match(
-        r"^(?:відкри\w*|покажи)\s+(?:(?:його|її|це|цей\s+файл|цю\s+папку)\s+(?:в|у|через)\s+(.+)|(?:його|її|це|цей\s+файл|цю\s+папку)|(?:в|у|через|в\s+ній|у\s+ній)\s+(.+))$",
-        norm,
-    )
+    m_open_prev = _RE_OPEN_PREV.match(norm)
     if m_open_prev:
         g1, g2 = m_open_prev.group(1), m_open_prev.group(2)
         raw_app = (g1 or g2 or "").strip()
-        app_hint = re.sub(r"^(?:ній|ньому|цьому|цій)\s+", "", raw_app).strip()
+        app_hint = _RE_OPEN_PREV_PRONOUNS.sub("", raw_app).strip()
         return CommandIntent(
             skill="file.open",
             args={
@@ -336,10 +430,7 @@ def _match_single_action(
         )
 
     # Пряме відкриття системних папок: "відкрий робочий стіл", "відкрий завантаження", "відкрий документи", "відкрий проєкт"
-    m_known_dir = re.match(
-        r"^(?:відкри\w*|покажи)\s+(робочий\s+стіл|десктоп|завантаження|документи|проєкт|проект|папку\s+проєкту|папку\s+проекту)(?:\s+(?:в|у|через)\s+(\w+))?$",
-        norm,
-    )
+    m_known_dir = _RE_KNOWN_DIR.match(norm)
     if m_known_dir:
         t_name = m_known_dir.group(1).strip()
         app_hint = m_known_dir.group(2)
@@ -355,22 +446,13 @@ def _match_single_action(
 
     # 4. Відправка повідомлення у Telegram (telegram.send)
     # Варіант 1: "напиши Олегу в телеграм що / : / текст"
-    m_tg = re.match(
-        r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+([а-яіїєґa-z0-9_]+(?:\s+[а-яіїєґa-z0-9_]+){0,2})\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s*(?:що|про те що|:)?\s*(.+)$",
-        norm,
-    )
+    m_tg = _RE_TG_1.match(norm)
     if not m_tg:
         # Варіант 2: "напиши в телеграм Олегу: текст" або "напиши в телеграм Олегу що текст"
-        m_tg = re.match(
-            r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s+([а-яіїєґa-z0-9_]+(?:\s+[а-яіїєґa-z0-9_]+){0,1})\s*(?:що|про те що|:)\s*(.+)$",
-            norm,
-        )
+        m_tg = _RE_TG_2.match(norm)
     if not m_tg:
         # Варіант 3: "напиши в телеграм Олегу текст" (без розділювача, одне слово контакт і далі повідомлення)
-        m_tg = re.match(
-            r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s+([а-яіїєґa-z0-9_]+)\s+(.+)$",
-            norm,
-        )
+        m_tg = _RE_TG_3.match(norm)
     if m_tg:
         contact_raw = m_tg.group(1).strip()
         msg_text = m_tg.group(2).strip()
@@ -383,10 +465,7 @@ def _match_single_action(
             )
 
     # 5. Відкриття конкретного сайту (web.search direct site)
-    m_site = re.match(
-        r"^(?:відкри\w*|перейди\s+на)\s+(?:сторінку|сайт|веб-сайт)?\s*(youtube|ютуб|ютюб|github|гітхаб|google|гугл|chatgpt|чат\s*гпт|пошту|gmail|mail)$",
-        norm,
-    )
+    m_site = _RE_SITE.match(norm)
     if m_site:
         site_raw = m_site.group(1).replace(" ", "")
         canon_site = SITE_SYNONYMS.get(site_raw, site_raw)
@@ -397,14 +476,10 @@ def _match_single_action(
         )
 
     # 6. Введення тексту в активне поле (text.type)
-    m_type_orig = re.match(
-        r"^(?:напиши|надрукуй|введи(?:\s+текст)?|встав(?:\s+текст)?)\s*[:\-]?\s+(.+)$",
-        orig,
-        flags=re.IGNORECASE,
-    )
-    if m_type_orig and not re.search(r"\b(в|у)\s+(телеграм\w*|тг|telegram)\b", norm):
+    m_type_orig = _RE_TYPE_ORIG.match(orig)
+    if m_type_orig and not _RE_IN_TG.search(norm):
         payload = m_type_orig.group(1).strip()
-        if not re.match(r"^(скрипт|функцію|клас|тест|код|програму)\b", payload.lower()):
+        if not _RE_CODE_KEYWORD.match(payload.lower()):
             return CommandIntent(
                 skill="text.type",
                 args={"text": payload},
@@ -412,21 +487,15 @@ def _match_single_action(
             )
 
     # 7. Документація за помилкою (docs.lookup)
-    if re.search(r"\b(документац\w*|поясни\s+помил[кц]\w*|розбери\s+помил[кц]\w*)\b", norm) and re.search(
-        r"\b(помил[кц]\w*|error|exception|traceback|буфер\w*)\b", norm
-    ):
-        err_match = re.search(r"\b([A-Za-z]+(?:Error|Exception|Warning))\b", orig)
+    if _RE_DOCS_TRIGGER.search(norm) and _RE_DOCS_KEYWORD.search(norm):
+        err_match = _RE_EXCEPTION_NAME.search(orig)
         args_doc: dict[str, Any] = {"source": "clipboard"}
         if err_match:
             args_doc["error"] = err_match.group(1)
         return CommandIntent(skill="docs.lookup", args=args_doc, confidence=0.96)
 
     # 8. Пошук у Google / на сайтах документації (web.search)
-    m_web = re.match(
-        r"^(?:знайди\s+(?:в|у)\s+(?:гугл\w*|google|інтернет\w*|мереж\w*)|пошукай\s+(?:в|у)\s+(?:гугл\w*|google|інтернет\w*)|загугли|погугли|шукай)\s+(.+)$",
-        orig,
-        flags=re.IGNORECASE,
-    )
+    m_web = _RE_WEB.match(orig)
     if m_web:
         query_str = m_web.group(1).strip()
         args_web: dict[str, Any] = {"query": query_str}
@@ -437,10 +506,7 @@ def _match_single_action(
         return CommandIntent(skill="web.search", args=args_web, confidence=0.96)
 
     # 9. Агентські кодерські задачі (agent.run)
-    if re.match(
-        r"^(?:відрефактор\w*|рефактор\w*|перепиши\s+файл|оптимізуй\s+файл|виправ\s+баг\s+у|напиши\s+(?:скрипт|функцію|клас|юніт-?тести|тести)|проаналізуй\s+код)\b",
-        norm,
-    ):
+    if _RE_AGENT.match(norm):
         return CommandIntent(
             skill="agent.run",
             args={"prompt": orig},
@@ -450,13 +516,7 @@ def _match_single_action(
 
     # 10. Переміщення вікна між моніторами або снап (window.move)
     # Варіант 1: з явною вказівкою монітора ("перенеси хром на сусідній монітор ліворуч", "перенеси браузер на другий монітор")
-    m_move = re.match(
-        r"^(?:перенес\w*|перекин\w*|відправ\w*|переміст\w*|посун\w*|кин\w*)"
-        r"(?:\s+(.*?))?"
-        r"\s+на\s+((?:перш\w+|основн\w+|головн\w+|друг\w+|інш\w+|сусідн\w+|прав\w+|трет\w+|лів\w+|[123])\s+монітор\w*)"
-        r"(?:\s+(.*))?$",
-        norm,
-    )
+    m_move = _RE_MOVE_EXPLICIT.match(norm)
     if m_move:
         raw_t = (m_move.group(1) or "").strip()
         mon_phrase = m_move.group(2)
@@ -471,18 +531,11 @@ def _match_single_action(
         )
 
     # Варіант 2: без явної фрази "на ... монітор" ("перенеси браузер", "перенеси вікно ліворуч")
-    m_move_bare = re.match(
-        r"^(?:перенес\w*|перекин\w*|відправ\w*|переміст\w*|посун\w*|кин\w*)(?:\s+(.+))?$",
-        norm,
-    )
+    m_move_bare = _RE_MOVE_BARE.match(norm)
     if m_move_bare:
         raw = (m_move_bare.group(1) or "").strip()
         snap_mode, has_snap = _extract_snap_mode(raw, default="maximize")
-        cleaned_target = re.sub(
-            r"\b(ліворуч|вліво|зліва|на лівий бік|на ліву половину|в ліву сторону|у ліву сторону|праворуч|вправо|справа|на правий бік|на праву половину|в праву сторону|у праву сторону|по центру|в центр|у центрі|посередині|розгорни|на весь екран|максимізуй)\b",
-            "",
-            raw,
-        ).strip()
+        cleaned_target = _RE_MOVE_CLEAN_WORDS.sub("", raw).strip()
         target = resolve_target_name(cleaned_target, custom_synonyms) if cleaned_target else previous_target
         return CommandIntent(
             skill="window.move",
@@ -490,10 +543,7 @@ def _match_single_action(
             confidence=0.95,
         )
 
-    m_snap = re.match(
-        r"^(?:постав\w*|прикріп\w*|притисн\w*|розміст\w*|переміст\w*|зсунь)\s*(.*?)\s*(?:в|у|на)?\s*(ліворуч|вліво|зліва|на лівий бік|на ліву половину|в ліву сторону|праворуч|вправо|справа|на правий бік|на праву половину|в праву сторону|по центру|в центр|у центрі|посередині)(.*)$",
-        norm,
-    )
+    m_snap = _RE_SNAP.match(norm)
     if m_snap:
         raw_t = m_snap.group(1).strip()
         target = resolve_target_name(raw_t, custom_synonyms) if raw_t else previous_target
@@ -506,10 +556,7 @@ def _match_single_action(
         )
 
     # 11. Зміна розміру вікна (window.resize)
-    m_resize = re.match(
-        r"^(збільш\w*|зменш\w*|розгорн\w*|максимізу\w*|віднов\w*|нормалізу\w*)\s*(.*)$",
-        norm,
-    )
+    m_resize = _RE_RESIZE.match(norm)
     if m_resize:
         verb = m_resize.group(1)
         rest_target = m_resize.group(2).strip()
@@ -530,10 +577,7 @@ def _match_single_action(
         )
 
     # 12. Фокус на вікні (window.focus)
-    m_focus = re.match(
-        r"^(?:перейди\s+(?:в|у|до)|переключись\s+на|перемкнись\s+на|сфокусуй(?:ся\s+на)?|активуй\s+вікно|покажи\s+вікно)\s+(.+)$",
-        norm,
-    )
+    m_focus = _RE_FOCUS.match(norm)
     if m_focus:
         target = resolve_target_name(m_focus.group(1), custom_synonyms)
         return CommandIntent(
@@ -543,7 +587,7 @@ def _match_single_action(
         )
 
     # 13. Запуск програми з білого списку (app.launch)
-    m_launch = re.match(r"^(?:відкри\w*|запуст\w*|старту\w*|увімкн\w*|ввімкн\w*|включ\w*)\s+(.+)$", norm)
+    m_launch = _RE_LAUNCH.match(norm)
     if m_launch:
         raw_app = m_launch.group(1).strip()
         app_key = resolve_target_name(raw_app, custom_synonyms)

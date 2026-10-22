@@ -6,7 +6,7 @@ import ctypes
 from ctypes import wintypes
 from typing import Callable
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QEvent, Qt, QThread, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QComboBox,
@@ -107,6 +107,14 @@ class HotkeyCaptureEdit(QLineEdit):
         self.selectAll()
         super().mousePressEvent(event)  # type: ignore[arg-type]
 
+    def event(self, event: QEvent) -> bool:
+        if self._capturing and event.type() == QEvent.Type.KeyPress:
+            key_event: QKeyEvent = event  # type: ignore[assignment]
+            if key_event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+                self.keyPressEvent(key_event)
+                return True
+        return super().event(event)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if not self._capturing:
             super().keyPressEvent(event)
@@ -144,9 +152,13 @@ class HotkeyCaptureEdit(QLineEdit):
             parts.append(key_map[key])
         elif Qt.Key.Key_F1 <= key <= Qt.Key.Key_F12:
             parts.append(f"f{int(key) - int(Qt.Key.Key_F1) + 1}")
+        elif Qt.Key.Key_A <= key <= Qt.Key.Key_Z:
+            parts.append(chr(ord("a") + (int(key) - int(Qt.Key.Key_A))))
+        elif Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
+            parts.append(chr(ord("0") + (int(key) - int(Qt.Key.Key_0))))
         else:
             ch = event.text().strip().lower()
-            if ch and ch.isprintable():
+            if ch and ch.isprintable() and ch.isascii():
                 parts.append(ch)
             else:
                 seq_str = Qt.Key(key).name.removeprefix("Key_").lower()
