@@ -64,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Перевизначити режим (drag або swipe)",
     )
 
+    # telegram ...
+    tg_parser = sub.add_parser("telegram", help="Керування Telegram-клієнтом (авторизація Telethon)")
+    tg_sub = tg_parser.add_subparsers(dest="action", required=True)
+    tg_sub.add_parser("login", help="Інтерактивна одноразова авторизація Telethon")
+    tg_sub.add_parser("dialogs", help="Показати список перших 20 діалогів")
+
     return parser
 
 
@@ -133,6 +139,48 @@ def main(argv: list[str] | None = None) -> int:
                 ctrl.mover.last_hand_to_window_ms,
             )
         return 0
+
+    if args.group == "telegram":
+        from friday.skills.telegram import DEFAULT_SESSION_PATH
+
+        if not cfg.secrets.telegram_api_id or not cfg.secrets.telegram_api_hash:
+            log.error("TELEGRAM_API_ID або TELEGRAM_API_HASH не налаштовані у .env")
+            return 1
+        try:
+            from telethon import TelegramClient
+        except ImportError:
+            log.error("telethon не встановлено. Встановіть через: .\\.venv\\Scripts\\pip.exe install telethon")
+            return 1
+
+        import asyncio
+
+        client = TelegramClient(str(DEFAULT_SESSION_PATH), int(cfg.secrets.telegram_api_id), cfg.secrets.telegram_api_hash)
+
+        if args.action == "login":
+            async def _do_login() -> None:
+                log.info("Запуск одноразової авторизації Telegram (Telethon)...")
+                await client.start()
+                me = await client.get_me()
+                log.info("✅ Авторизація успішна! Увійшли як: %s (ID: %s)", getattr(me, "first_name", ""), me.id)
+                await client.disconnect()
+
+            asyncio.run(_do_login())
+            return 0
+
+        if args.action == "dialogs":
+            async def _do_dialogs() -> None:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    log.error("❌ Сесія не авторизована. Спочатку виконайте: python -m friday.dev telegram login")
+                    return
+                dialogs = await client.get_dialogs(limit=20)
+                log.info("Знайдено діалогів (перші %d):", len(dialogs))
+                for d in dialogs:
+                    log.info("  • %s (ID: %s)", d.name, d.id)
+                await client.disconnect()
+
+            asyncio.run(_do_dialogs())
+            return 0
 
     return 1
 
