@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from enum import StrEnum
+from typing import Callable
 
+from friday.audio import AudioRecorder
 from friday.config import AppConfig
+from friday.feedback import FeedbackManager
+from friday.hotkeys import HotkeyEvent, HotkeyEventType, HotkeyListener
 
 log = logging.getLogger("friday.app")
 
@@ -23,17 +28,35 @@ class AssistantState(StrEnum):
 
 
 class FridayApp:
-    """Головний клас асистента, що керує станами та життєвим циклом."""
+    """Головний клас асистента, що керує станами, хоткеями та записом звуку."""
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        recorder: AudioRecorder | None = None,
+        feedback: FeedbackManager | None = None,
+        listener_factory: Callable[..., HotkeyListener] | None = None,
+    ) -> None:
         self.config = config
         self._state: AssistantState = AssistantState.IDLE
         self._stop_event = asyncio.Event()
+        self.event_queue: asyncio.Queue[HotkeyEvent] = asyncio.Queue(maxsize=32)
+
+        self.recorder = recorder or AudioRecorder(config=config.audio)
+        self.feedback = feedback or FeedbackManager()
+        self._listener_factory = listener_factory
+        self._hotkey_listener: HotkeyListener | None = None
+        self._last_audio: bytes | None = None
 
     @property
     def state(self) -> AssistantState:
         """Поточний стан асистента."""
         return self._state
+
+    @property
+    def last_audio(self) -> bytes | None:
+        """Останній записаний WAV-буфер."""
+        return self._last_audio
 
     def transition(self, new_state: AssistantState) -> None:
         """Переводить автомат у новий стан із логуванням."""
@@ -45,8 +68,64 @@ class FridayApp:
         """Сигналізує про завершення роботи головного циклу."""
         self._stop_event.set()
 
+    async def handle_event(self, event: HotkeyEvent) -> None:
+        """Обробляє одну подію гарячої клавіші згідно з автоматом станів."""
+        if event.type == HotkeyEventType.VOICE_PRESS:
+            await self._on_voice_press(event)
+        elif event.type == HotkeyEventType.VOICE_RELEASE:
+            await self._on_voice_release(event)
+        elif event.type == HotkeyEventType.CANCEL:
+            await self._on_cancel()
+        elif event.type == HotkeyEventType.EXPLAIN_CLIPBOARD:
+            log.info("Хоткей explain_clipboard натиснуто (буде підключено на Етапі 6).")
+
+    async def _on_voice_press(self, event: HotkeyEvent) -> None:
+        """Старт запису по утриманню клавіші."""
+        if self._state == AssistantState.LISTENING:
+            return
+        self.transition(AssistantState.LISTENING)
+        started = await asyncio.to_thread(self.recorder.start)
+        latency_ms = (time.perf_counter() - event.timestamp) * 1000.0
+        log.info("⏱ Затримка [hotkey_to_record_start]: %.2f мс", latency_ms)
+        if started:
+            asyncio.create_task(self.feedback.beep_start())
+        else:
+            self.transition(AssistantState.IDLE)
+
+    async def _on_voice_release(self, event: HotkeyEvent) -> None:
+        """Дозапис tail_ms після відпускання клавіші та зупинка запису."""
+        if self._state != AssistantState.LISTENING:
+            return
+
+        tail_s = self.config.audio.tail_ms / 1000.0
+        if tail_s > 0:
+            await asyncio.sleep(tail_s)
+
+        wav_bytes = await asyncio.to_thread(self.recorder.stop)
+        asyncio.create_task(self.feedback.beep_stop())
+
+        if not wav_bytes:
+            self.transition(AssistantState.IDLE)
+            return
+
+        self._last_audio = wav_bytes
+        if self.recorder.last_saved_path:
+            log.info("Аудіо збережено у: %s", self.recorder.last_saved_path)
+
+        # На Етапі 2 тут буде перехід у TRANSCRIBING -> ROUTING -> EXECUTING
+        self.transition(AssistantState.IDLE)
+
+    async def _on_cancel(self) -> None:
+        """Скасування запису або дії по Esc."""
+        if self.recorder.recording:
+            await asyncio.to_thread(self.recorder.stop)
+        if self._state != AssistantState.IDLE:
+            log.info("Дію скасовано користувачем (Esc).")
+            self.transition(AssistantState.IDLE)
+            asyncio.create_task(self.feedback.beep_error())
+
     async def run(self, once: bool = False) -> None:
-        """Запускає головний цикл очікування подій."""
+        """Запускає слухач клавіш та головний цикл обробки черги подій (без polling)."""
         log.info(
             "FRIDAY запущено (стан=%s, stt=%s, hotkey=%s)",
             self._state.value,
@@ -57,10 +136,38 @@ class FridayApp:
             log.info("Режим перевірки (--once): завершення роботи.")
             return
 
+        loop = asyncio.get_running_loop()
+        if self._listener_factory is not None:
+            self._hotkey_listener = self._listener_factory(self.config.hotkeys, loop, self.event_queue)
+        else:
+            self._hotkey_listener = HotkeyListener(self.config.hotkeys, loop, self.event_queue)
+
+        self._hotkey_listener.start()
         try:
-            await self._stop_event.wait()
+            while not self._stop_event.is_set():
+                queue_task = asyncio.create_task(self.event_queue.get())
+                stop_task = asyncio.create_task(self._stop_event.wait())
+                done, pending = await asyncio.wait(
+                    {queue_task, stop_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for p in pending:
+                    p.cancel()
+
+                if queue_task in done:
+                    event = queue_task.result()
+                    try:
+                        await self.handle_event(event)
+                    except Exception as exc:
+                        log.exception("Помилка обробки події %s: %s", event.type, exc)
+                        self.transition(AssistantState.IDLE)
+                        await self.feedback.notify("Помилка FRIDAY", str(exc))
         except asyncio.CancelledError:
             log.info("Отримано сигнал скасування.")
         finally:
+            if self._hotkey_listener is not None:
+                self._hotkey_listener.stop()
+            if self.recorder.recording:
+                await asyncio.to_thread(self.recorder.stop)
             self.transition(AssistantState.IDLE)
             log.info("FRIDAY зупинено.")
