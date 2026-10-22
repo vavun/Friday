@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from ctypes import wintypes
 from typing import Any
 
 from PySide6.QtCore import QObject, Qt, Signal
@@ -51,8 +52,17 @@ class _ProcessSignalBridge(QObject):
     log_received = Signal(str)
 
 
+RESTORE_WINDOW_MSG_ID: int = 0
+try:
+    RESTORE_WINDOW_MSG_ID = int(
+        ctypes.windll.user32.RegisterWindowMessageW("FridayLauncherRestoreWindowMessage")
+    )
+except Exception:
+    RESTORE_WINDOW_MSG_ID = 0
+
+
 class SingleInstanceMutex:
-    """Системний м'ютекс Windows для захисту від подвійного запуску лаунчера."""
+    """Системний м'ютекс Windows із автоматичним розгортанням існуючого вікна з трею при повторному запуску."""
 
     def __init__(self, name: str = "Local\\FridayLauncherSingleInstanceMutex") -> None:
         self.name = name
@@ -61,12 +71,16 @@ class SingleInstanceMutex:
 
     def acquire(self) -> bool:
         try:
-            kernel32 = ctypes.windll.kernel32
-            handle = kernel32.CreateMutexW(None, False, self.name)
-            last_err = kernel32.GetLastError()
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            ctypes.set_last_error(0)
+            handle = k32.CreateMutexW(None, False, self.name)
+            last_err = ctypes.get_last_error()
             self._handle = handle
             # ERROR_ALREADY_EXISTS = 183
             self.already_running = last_err == 183
+            if self.already_running and RESTORE_WINDOW_MSG_ID:
+                # HWND_BROADCAST = 0xFFFF — миттєво будить згорнуте у трей вікно без навантаження на CPU
+                ctypes.windll.user32.PostMessageW(0xFFFF, RESTORE_WINDOW_MSG_ID, 0, 0)
             return not self.already_running
         except Exception:
             return True
@@ -182,6 +196,7 @@ class LauncherWindow(QMainWindow):
 
         self.refresh_dashboard_state()
         self.switch_page("dashboard")
+        _ = self.winId()
 
     def _init_pages(self) -> None:
         self.dashboard_page = DashboardPage(
@@ -326,10 +341,21 @@ class LauncherWindow(QMainWindow):
         self.hide()
 
     def restore_from_tray(self) -> None:
-        """Відновлює головне вікно з трею."""
+        """Відновлює головне вікно з трею та виводить його на передній план Windows."""
+        self.setWindowState(
+            (self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive
+        )
         self.showNormal()
-        self.activateWindow()
+        self.show()
         self.raise_()
+        self.activateWindow()
+        try:
+            hwnd = int(self.winId())
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
 
     def quit_application(self) -> None:
         """Повністю закриває лаунчер і гарантовано зупиняє дочірній процес ядра."""
@@ -347,6 +373,17 @@ class LauncherWindow(QMainWindow):
         if self.tray_icon is not None:
             self.tray_icon.hide()
         super().closeEvent(event)
+
+    def nativeEvent(self, eventType: Any, message: Any) -> Any:
+        """Обробляє системне повідомлення пробудження (коли користувач повторно запускає лаунчер)."""
+        if RESTORE_WINDOW_MSG_ID and message:
+            try:
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == RESTORE_WINDOW_MSG_ID:
+                    self.restore_from_tray()
+            except Exception:
+                pass
+        return super().nativeEvent(eventType, message)
 
 
 def create_launcher_app(argv: list[str] | None = None) -> tuple[QApplication, LauncherWindow]:
@@ -378,7 +415,7 @@ def run_launcher(argv: list[str] | None = None) -> int:
         if args.minimized or window.app_config.ui.start_minimized:
             window.hide_to_tray()
         else:
-            window.show()
+            window.restore_from_tray()
         return app.exec()
     finally:
         mutex.release()
