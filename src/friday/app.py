@@ -32,7 +32,7 @@ from friday.skills.windows import (
     WindowMoveSkill,
     WindowResizeSkill,
 )
-from friday.stt import Transcriber, WhisperLocalTranscriber, create_transcriber
+from friday.stt import GeminiTranscriber, Transcriber, WhisperLocalTranscriber, create_transcriber
 
 log = logging.getLogger("friday.app")
 
@@ -335,6 +335,22 @@ class FridayApp:
             self.transition(AssistantState.IDLE)
             asyncio.create_task(self.feedback.beep_error())
 
+    async def _safe_warmup_whisper(self) -> None:
+        """Безпечний прогрів Faster-Whisper без падіння основного процесу при помилці завантаження."""
+        if not isinstance(self.transcriber, WhisperLocalTranscriber):
+            return
+        try:
+            await self.transcriber.warmup()
+        except Exception as exc:
+            log.exception("Не вдалося ініціалізувати Faster-Whisper: %s", exc)
+            await self.feedback.notify("Помилка Faster-Whisper", str(exc))
+            if self.config.secrets.gemini_api_key.strip():
+                log.warning("Перемикання STT на резервний GeminiTranscriber.")
+                self.transcriber = GeminiTranscriber(
+                    config=self.config.stt,
+                    api_key=self.config.secrets.gemini_api_key,
+                )
+
     async def run(self, once: bool = False) -> None:
         """Запускає прогрів STT (для whisper_local), слухач клавіш та цикл обробки подій."""
         log.info(
@@ -343,9 +359,6 @@ class FridayApp:
             self.config.stt.backend,
             self.config.hotkeys.voice,
         )
-        if isinstance(self.transcriber, WhisperLocalTranscriber) and not once:
-            await self.transcriber.warmup()
-
         if once:
             log.info("Режим перевірки (--once): завершення роботи.")
             return
@@ -357,6 +370,9 @@ class FridayApp:
             self._hotkey_listener = HotkeyListener(self.config.hotkeys, loop, self.event_queue)
 
         self._hotkey_listener.start()
+        warmup_task: asyncio.Task[None] | None = None
+        if isinstance(self.transcriber, WhisperLocalTranscriber):
+            warmup_task = asyncio.create_task(self._safe_warmup_whisper())
         try:
             while not self._stop_event.is_set():
                 queue_task = asyncio.create_task(self.event_queue.get())
@@ -379,6 +395,8 @@ class FridayApp:
         except asyncio.CancelledError:
             log.info("Отримано сигнал скасування.")
         finally:
+            if warmup_task is not None and not warmup_task.done():
+                warmup_task.cancel()
             if self._hotkey_listener is not None:
                 self._hotkey_listener.stop()
             if self.gesture_controller is not None and self.gesture_controller.is_running:

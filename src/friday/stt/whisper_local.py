@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 from typing import Any, Callable
 
 import numpy as np
@@ -12,6 +13,7 @@ import numpy as np
 from friday.config import SttConfig
 from friday.util.timing import measure_time
 
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 log = logging.getLogger("friday.stt.whisper_local")
 
 WHISPER_INITIAL_PROMPT_UK = (

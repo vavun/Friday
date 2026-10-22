@@ -20,9 +20,11 @@ class PreflightItem:
     fix_page_id: str
 
 
-def check_core_dependencies() -> tuple[bool, str]:
+def check_core_dependencies(stt_backend: str = "gemini") -> tuple[bool, str]:
     """Перевіряє наявність базових бібліотек ядра через find_spec (без їх імпорту)."""
-    required = ("pydantic", "pynput", "sounddevice", "numpy", "google.genai", "win32gui")
+    required: list[str] = ["pydantic", "pynput", "sounddevice", "numpy", "google.genai", "win32gui"]
+    if stt_backend == "whisper_local":
+        required.append("faster_whisper")
     missing = [pkg for pkg in required if importlib.util.find_spec(pkg) is None]
     if missing:
         return (False, f"Відсутні пакети: {', '.join(missing)}")
@@ -92,7 +94,7 @@ def run_preflight_checks(
     )
 
     # 3. Залежності
-    deps_ok, deps_detail = check_core_dependencies()
+    deps_ok, deps_detail = check_core_dependencies(config.stt.backend)
     items.append(
         PreflightItem(
             id="dependencies",
