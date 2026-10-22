@@ -1,5 +1,17 @@
 # CHANGELOG — FRIDAY
 
+## [0.9.0] — Етап 4: Роутер (Fast path rules + Smart path LLM JSON) (2026-10-22)
+
+### Додано
+- Реалізовано `friday.router.rules` (`match_fast_rule`, `normalize_command_text`, `resolve_target_name`, `TARGET_SYNONYMS`, `MONITOR_WORDS`):
+  - Детермінований Fast path для україномовних голосових команд без виклику ШІ: `window.move` (переміщення між моніторами 1/2/3 та снап `left`/`right`/`center`), `window.resize` (`bigger`/`smaller`/`maximize`/`restore`), `window.focus`, `app.launch`, `gesture.drag` (`start`/`stop`), `web.search` (із визначенням доменів `python`/`fastapi`/`pydantic`/`mdn`), `docs.lookup`, `text.type`, `telegram.send` (`needs_confirm=True`), `agent.run` (`needs_confirm=True`).
+  - Нормалізація тексту (нижній регістр, апострофи, кінцева пунктуація, типові українські відмінкові закінчення).
+- Реалізовано `friday.router.llm_parser` (`LlmCommandParser`, `extract_json_text`, `SYSTEM_PROMPT_TEMPLATE`):
+  - Smart path через Gemini Flash (`gemini-3.5-flash-lite`, `temperature=0.0`, `max_output_tokens=200`, `response_mime_type="application/json"`, таймаут `5.0 с`).
+  - Валідація виводу за схемою `CommandIntent` із автоматичним 1 ретраєм при невалідному JSON/схемі та перетворенням на `clarify` при `confidence < 0.7` або спробі запуску програми поза білим списком `[apps]`.
+- Реалізовано `friday.router.CommandRouter` та інтегровано повний цикл маршрутизації й Confirm Gate у `friday.app.FridayApp` (`TRANSCRIBING -> ROUTING -> (CONFIRMING: Enter/Esc) -> EXECUTING -> IDLE`).
+- Додано набір тестів `tests/test_router.py` (корпус із 35 україномовних фраз: `85.7%` через Fast path, середня затримка `0.56 мс`, максимальна `10.50 мс` при цілі `< 150 мс`).
+
 ## [0.8.0] — Лаунчер (Під-етап L3): Сторінки Folders (`path_rules.py`) та Apps (`app_scanner.py`) (2026-10-22)
 
 ### Додано

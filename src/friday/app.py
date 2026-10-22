@@ -11,9 +11,17 @@ from typing import Callable
 from friday.audio import AudioRecorder
 from friday.config import AppConfig
 from friday.feedback import FeedbackManager
-from friday.gesture.controller import GestureRuntimeController
+from friday.gesture.controller import GestureDragSkill, GestureRuntimeController
 from friday.hotkeys import HotkeyEvent, HotkeyEventType, HotkeyListener
-from friday.skills.windows import WindowManager
+from friday.router import CommandIntent, CommandRouter
+from friday.skills.apps import AppLauncher, AppLaunchSkill
+from friday.skills.base import SkillRegistry
+from friday.skills.windows import (
+    WindowFocusSkill,
+    WindowManager,
+    WindowMoveSkill,
+    WindowResizeSkill,
+)
 from friday.stt import Transcriber, WhisperLocalTranscriber, create_transcriber
 
 log = logging.getLogger("friday.app")
@@ -39,6 +47,8 @@ class FridayApp:
         recorder: AudioRecorder | None = None,
         feedback: FeedbackManager | None = None,
         transcriber: Transcriber | None = None,
+        router: CommandRouter | None = None,
+        registry: SkillRegistry | None = None,
         gesture_controller: GestureRuntimeController | None = None,
         listener_factory: Callable[..., HotkeyListener] | None = None,
     ) -> None:
@@ -50,11 +60,34 @@ class FridayApp:
         self.recorder = recorder or AudioRecorder(config=config.audio)
         self.feedback = feedback or FeedbackManager()
         self.transcriber: Transcriber = transcriber or create_transcriber(config)
+        self.router: CommandRouter = router or CommandRouter(config=config)
         self.gesture_controller = gesture_controller
+        self.registry: SkillRegistry = registry or self._build_default_registry()
         self._listener_factory = listener_factory
         self._hotkey_listener: HotkeyListener | None = None
         self._last_audio: bytes | None = None
         self._last_transcript: str = ""
+        self._last_intent: CommandIntent | None = None
+        self._pending_intent: CommandIntent | None = None
+
+    def _build_default_registry(self) -> SkillRegistry:
+        """Реєструє базові навички керування вікнами та запуску програм."""
+        reg = SkillRegistry()
+        wm = WindowManager()
+        reg.register(WindowMoveSkill(wm))
+        reg.register(WindowResizeSkill(wm))
+        reg.register(WindowFocusSkill(wm))
+        reg.register(
+            AppLaunchSkill(
+                AppLauncher(
+                    self.config.apps,
+                    custom_synonyms=self.config.app_synonyms,
+                )
+            )
+        )
+        if self.gesture_controller is not None:
+            reg.register(GestureDragSkill(self.gesture_controller))
+        return reg
 
     @property
     def state(self) -> AssistantState:
@@ -70,6 +103,11 @@ class FridayApp:
     def last_transcript(self) -> str:
         """Останній розпізнаний текст команди."""
         return self._last_transcript
+
+    @property
+    def last_intent(self) -> CommandIntent | None:
+        """Остання маршрутизована команда."""
+        return self._last_intent
 
     def transition(self, new_state: AssistantState) -> None:
         """Переводить автомат у новий стан із логуванням."""
@@ -87,6 +125,8 @@ class FridayApp:
             await self._on_voice_press(event)
         elif event.type == HotkeyEventType.VOICE_RELEASE:
             await self._on_voice_release(event)
+        elif event.type == HotkeyEventType.CONFIRM:
+            await self._on_confirm()
         elif event.type == HotkeyEventType.CANCEL:
             await self._on_cancel()
         elif event.type == HotkeyEventType.GESTURE_PRESS:
@@ -110,7 +150,7 @@ class FridayApp:
             self.transition(AssistantState.IDLE)
 
     async def _on_voice_release(self, event: HotkeyEvent) -> None:
-        """Дозапис tail_ms після відпускання клавіші, зупинка запису та запуск STT."""
+        """Дозапис tail_ms після відпускання клавіші, зупинка запису, STT, роутинг та виконання."""
         if self._state != AssistantState.LISTENING:
             return
 
@@ -149,8 +189,59 @@ class FridayApp:
             self.transition(AssistantState.IDLE)
             return
 
-        # На Етапі 4 тут буде перехід у ROUTING -> EXECUTING
-        self.transition(AssistantState.IDLE)
+        await self._route_and_dispatch(self._last_transcript)
+
+    async def _route_and_dispatch(self, text: str) -> None:
+        """Маршрутизує розпізнаний текст і передає команду на виконання або підтвердження."""
+        self.transition(AssistantState.ROUTING)
+        intent = await self.router.route(text)
+        self._last_intent = intent
+
+        if intent.skill == "clarify":
+            question = str(intent.args.get("question", "Уточніть команду, будь ласка."))
+            log.info("❓ Потрібне уточнення: %s", question)
+            self.transition(AssistantState.IDLE)
+            await self.feedback.notify("Уточніть команду", question)
+            return
+
+        if intent.needs_confirm:
+            self._pending_intent = intent
+            self.transition(AssistantState.CONFIRMING)
+            await self.feedback.notify(
+                "Підтвердіть дію (Enter / Esc)",
+                f"{intent.skill}: {intent.args}",
+            )
+            return
+
+        await self._execute_intent(intent)
+
+    async def _on_confirm(self) -> None:
+        """Підтвердження очікуваної ризикової дії клавішею Enter."""
+        if self._state != AssistantState.CONFIRMING or self._pending_intent is None:
+            return
+        intent = self._pending_intent
+        self._pending_intent = None
+        await self._execute_intent(intent)
+
+    async def _execute_intent(self, intent: CommandIntent) -> None:
+        """Виконує навичку з реєстру та повертає автомат у стан IDLE."""
+        self.transition(AssistantState.EXECUTING)
+        try:
+            if intent.skill == "gesture.drag" and self.registry.get("gesture.drag") is None:
+                ctrl = self._ensure_gesture_controller()
+                self.registry.register(GestureDragSkill(ctrl))
+
+            skill = self.registry.get(intent.skill)
+            if skill is not None:
+                await skill.execute(intent.args)
+            else:
+                log.info("Навичку '%s' розпізнано, але ще не підключено до реєстру.", intent.skill)
+        except Exception as exc:
+            log.exception("Помилка виконання навички %s: %s", intent.skill, exc)
+            await self.feedback.beep_error()
+            await self.feedback.notify(f"Помилка {intent.skill}", str(exc))
+        finally:
+            self.transition(AssistantState.IDLE)
 
     def _ensure_gesture_controller(self) -> GestureRuntimeController:
         if self.gesture_controller is None:
@@ -181,6 +272,7 @@ class FridayApp:
 
         if self.recorder.recording:
             await asyncio.to_thread(self.recorder.stop)
+        self._pending_intent = None
         if self._state != AssistantState.IDLE:
             log.info("Дію скасовано користувачем (Esc).")
             self.transition(AssistantState.IDLE)
