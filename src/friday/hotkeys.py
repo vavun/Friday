@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Callable
 
+import six
+
+if hasattr(six, "_SixMetaPathImporter") and not hasattr(six._SixMetaPathImporter, "_path"):
+    six._SixMetaPathImporter._path = []  # type: ignore[attr-defined]
+
 from pynput import keyboard
 
 from friday.config import HotkeysConfig

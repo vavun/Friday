@@ -1,5 +1,16 @@
 # CHANGELOG — FRIDAY
 
+## [0.6.0] — Лаунчер (Під-етап L1): Каркас, неонова кіберпанк-тема, навігація та `config.local.toml` (2026-10-22)
+
+### Додано
+- Створено ізольований пакет десктопного застосунку `friday.launcher` (`python -m friday.launcher` та `run_launcher.bat`), який не імпортує важкі модулі ядра (STT, аудіо, MediaPipe).
+- Додано локальні шрифти з відкритою ліцензією OFL-1.1 у `src/friday/launcher/assets/fonts/` (`Rajdhani-Bold`, `Rajdhani-SemiBold` для техно-заголовків та `JetBrainsMono-Regular` для логів).
+- Реалізовано `friday.launcher.theme`: неонова кіберпанк-палітра (`#05080F`, `#0A0F1C`, `#00E5FF`, `#2979FF`), QSS-стилізація, ефект світіння `QGraphicsDropShadowEffect` та генератор векторної іконки.
+- Реалізовано `friday.launcher.pages.NeonOrbWidget` (пульсуюча орба `<= 24 FPS`, яка автоматично вимикає таймер у прихованому стані / треї -> `~0% CPU`) та каркас усіх 9 сторінок (`dashboard`, `keys`, `folders`, `apps`, `voice`, `monitors`, `safety`, `logs`, `settings`) із лівим меню навігації.
+- Додано підтримку `config.local.toml` (додано у `.gitignore`) з рекурсивним накладанням поверх `config.toml` у `friday.config.load_config` та атомарним записом із валідацією через `ConfigStore` (`friday.launcher.services.config_store`).
+- Додано загальний перевіряльник дозволених шляхів `friday.safety.check_path_allowed` для `[paths].allowed_folders`.
+- Додано юніт- та GUI smoke-тести `tests/test_launcher_stage1.py`.
+
 ## [0.5.0] — Етап A: Навичка `gesture.drag` (відстеження руки через камеру) (2026-10-22)
 
 ### Додано

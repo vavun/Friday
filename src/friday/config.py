@@ -1,13 +1,14 @@
-"""Завантаження, валідація конфігурації (config.toml + .env) та налаштування логування."""
+"""Завантаження, валідація конфігурації (config.toml + config.local.toml + .env) та налаштування логування."""
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import tomllib
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.toml"
+DEFAULT_LOCAL_CONFIG_PATH = PROJECT_ROOT / "config.local.toml"
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 
 
@@ -34,6 +36,7 @@ class AudioConfig(BaseModel):
     max_seconds: int = Field(default=15, ge=1, le=60)
     tail_ms: int = Field(default=200, ge=0, le=2000)
     min_ms: int = Field(default=300, ge=50, le=2000)
+    device_index: int | None = None
 
 
 class SttConfig(BaseModel):
@@ -57,6 +60,37 @@ class MonitorsConfig(BaseModel):
 
     primary: int = Field(default=0, ge=0)
     docs: int = Field(default=1, ge=0)
+
+
+class AllowedFolderEntry(BaseModel):
+    """Елемент білого списку папок, до яких асистент має доступ."""
+
+    label: str
+    path: str
+    mode: Literal["read_only", "read_write"] = "read_only"
+
+
+class PathsConfig(BaseModel):
+    """Конфігурація дозволених папок проєкту ([paths])."""
+
+    allowed_folders: list[AllowedFolderEntry] = Field(default_factory=list)
+
+
+class SafetyConfig(BaseModel):
+    """Налаштування підтвердження чутливих дій ([safety])."""
+
+    confirm_messages: bool = True
+    confirm_file_changes: bool = True
+
+
+class UiSettingsConfig(BaseModel):
+    """Налаштування інтерфейсу Friday Launcher ([ui])."""
+
+    language: Literal["uk", "en"] = "uk"
+    autostart: bool = False
+    start_minimized: bool = False
+    reduce_animations: bool = False
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
 
 class AgentConfig(BaseModel):
@@ -111,24 +145,51 @@ class AppConfig(BaseModel):
     llm: LlmConfig = Field(default_factory=LlmConfig)
     monitors: MonitorsConfig = Field(default_factory=MonitorsConfig)
     apps: dict[str, str] = Field(default_factory=dict)
+    app_synonyms: dict[str, str] = Field(default_factory=dict)
+    paths: PathsConfig = Field(default_factory=PathsConfig)
+    safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    ui: UiSettingsConfig = Field(default_factory=UiSettingsConfig)
     docs_sites: dict[str, str] = Field(default_factory=dict)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     gesture: GestureConfig = Field(default_factory=GestureConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 
 
+def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Рекурсивно накладає словник override поверх base, повертаючи новий словник."""
+    merged = copy.deepcopy(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k] = deep_merge_dicts(merged[k], v)
+        else:
+            merged[k] = copy.deepcopy(v)
+    return merged
+
+
 def load_config(
     config_path: Path | None = None,
     env_path: Path | None = None,
+    local_config_path: Path | None = None,
 ) -> AppConfig:
-    """Читає config.toml та .env і повертає провалідований AppConfig."""
+    """Читає config.toml, накладає config.local.toml (якщо існує) та .env і повертає AppConfig."""
     load_dotenv(dotenv_path=env_path or (PROJECT_ROOT / ".env"), override=False)
 
     path = config_path or DEFAULT_CONFIG_PATH
-    raw_data: dict = {}
+    raw_data: dict[str, Any] = {}
     if path.exists():
         with path.open("rb") as f:
             raw_data = tomllib.load(f)
+
+    # Накладання особистого config.local.toml поверх базового config.toml
+    if local_config_path is None and config_path is None:
+        local_path: Path | None = DEFAULT_LOCAL_CONFIG_PATH
+    else:
+        local_path = local_config_path
+
+    if local_path is not None and local_path.exists():
+        with local_path.open("rb") as f:
+            local_data = tomllib.load(f)
+        raw_data = deep_merge_dicts(raw_data, local_data)
 
     secrets = SecretsConfig(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
