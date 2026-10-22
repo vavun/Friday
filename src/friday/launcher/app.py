@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 from ctypes import wintypes
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent
@@ -25,15 +25,7 @@ from PySide6.QtWidgets import (
 
 from friday.launcher.i18n import tr
 from friday.launcher.pages import BasePage
-from friday.launcher.pages.apps import AppsPage
 from friday.launcher.pages.dashboard import DashboardPage
-from friday.launcher.pages.folders import FoldersPage
-from friday.launcher.pages.keys import KeysPage
-from friday.launcher.pages.logs import LogsPage
-from friday.launcher.pages.monitors import MonitorsPage
-from friday.launcher.pages.safety import SafetyPage
-from friday.launcher.pages.settings import SettingsPage
-from friday.launcher.pages.voice import VoicePage
 from friday.launcher.services.config_store import ConfigStore
 from friday.launcher.services.env_store import EnvStore
 from friday.launcher.services.preflight import run_preflight_checks
@@ -43,6 +35,16 @@ from friday.launcher.theme import (
     create_neon_orb_icon,
     load_bundled_fonts,
 )
+
+if TYPE_CHECKING:
+    from friday.launcher.pages.apps import AppsPage
+    from friday.launcher.pages.folders import FoldersPage
+    from friday.launcher.pages.keys import KeysPage
+    from friday.launcher.pages.logs import LogsPage
+    from friday.launcher.pages.monitors import MonitorsPage
+    from friday.launcher.pages.safety import SafetyPage
+    from friday.launcher.pages.settings import SettingsPage
+    from friday.launcher.pages.voice import VoicePage
 
 
 class _ProcessSignalBridge(QObject):
@@ -194,11 +196,13 @@ class LauncherWindow(QMainWindow):
         if enable_tray and QSystemTrayIcon.isSystemTrayAvailable():
             self._init_tray()
 
-        self.refresh_dashboard_state()
         self.switch_page("dashboard")
-        _ = self.winId()
 
     def _init_pages(self) -> None:
+        self._valid_page_ids: set[str] = {pid for pid, _ in self.PAGE_ORDER}
+        self._live_log_buffer: list[str] = []
+        self._proc_bridge.log_received.connect(self._on_process_log_line)
+
         self.dashboard_page = DashboardPage(
             on_navigate=self.switch_page,
             on_start_requested=self.start_core,
@@ -206,41 +210,133 @@ class LauncherWindow(QMainWindow):
             on_restart_requested=self.restart_core,
             parent=self,
         )
-        self.keys_page = KeysPage(
-            env_store=self.env_store,
-            on_keys_saved=self.refresh_dashboard_state,
-            parent=self,
-        )
-        self.folders_page = FoldersPage(
-            config_store=self.config_store,
-            on_folders_changed=self.refresh_dashboard_state,
-            parent=self,
-        )
-        self.apps_page = AppsPage(
-            config_store=self.config_store,
-            on_apps_changed=self.refresh_dashboard_state,
-            parent=self,
-        )
-        self.voice_page = VoicePage(parent=self)
-        self.monitors_page = MonitorsPage(parent=self)
-        self.safety_page = SafetyPage(parent=self)
-        self.logs_page = LogsPage(parent=self)
-        self.settings_page = SettingsPage(parent=self)
+        self.pages["dashboard"] = self.dashboard_page
+        self.stack.addWidget(self.dashboard_page)
 
-        all_pages: list[BasePage] = [
-            self.dashboard_page,
-            self.keys_page,
-            self.folders_page,
-            self.apps_page,
-            self.voice_page,
-            self.monitors_page,
-            self.safety_page,
-            self.logs_page,
-            self.settings_page,
-        ]
-        for page in all_pages:
-            self.pages[page.page_id] = page
-            self.stack.addWidget(page)
+    def _on_process_log_line(self, line: str) -> None:
+        self._live_log_buffer.append(line)
+        if len(self._live_log_buffer) > 300:
+            self._live_log_buffer = self._live_log_buffer[-300:]
+        page = self.pages.get("logs")
+        if page is not None and hasattr(page, "append_live_line"):
+            page.append_live_line(line)  # type: ignore[attr-defined]
+
+    def _ensure_page(self, page_id: str) -> BasePage:
+        """Ліниво ініціалізує сторінки лаунчера при першому переході (для холодного старту вікна < 1 с)."""
+        if page_id not in self._valid_page_ids:
+            raise KeyError(f"Сторінку '{page_id}' не знайдено")
+        if page_id in self.pages:
+            return self.pages[page_id]
+
+        if page_id == "keys":
+            from friday.launcher.pages.keys import KeysPage
+
+            page: BasePage = KeysPage(
+                env_store=self.env_store,
+                on_keys_saved=self.refresh_dashboard_state,
+                parent=self,
+            )
+        elif page_id == "folders":
+            from friday.launcher.pages.folders import FoldersPage
+
+            page = FoldersPage(
+                config_store=self.config_store,
+                on_folders_changed=self.refresh_dashboard_state,
+                parent=self,
+            )
+        elif page_id == "apps":
+            from friday.launcher.pages.apps import AppsPage
+
+            page = AppsPage(
+                config_store=self.config_store,
+                on_apps_changed=self.refresh_dashboard_state,
+                parent=self,
+            )
+        elif page_id == "voice":
+            from friday.launcher.pages.voice import VoicePage
+
+            page = VoicePage(
+                config_store=self.config_store,
+                on_voice_changed=self.refresh_dashboard_state,
+                parent=self,
+            )
+        elif page_id == "monitors":
+            from friday.launcher.pages.monitors import MonitorsPage
+
+            page = MonitorsPage(
+                config_store=self.config_store,
+                on_monitors_changed=self.refresh_dashboard_state,
+                parent=self,
+            )
+        elif page_id == "safety":
+            from friday.launcher.pages.safety import SafetyPage
+
+            page = SafetyPage(
+                config_store=self.config_store,
+                on_safety_changed=self.refresh_dashboard_state,
+                parent=self,
+            )
+        elif page_id == "logs":
+            from friday.launcher.pages.logs import LogsPage
+
+            logs_pg = LogsPage(
+                secrets_provider=lambda: [
+                    self.env_store.get_key("GEMINI_API_KEY"),
+                    self.env_store.get_key("TELEGRAM_API_HASH"),
+                ],
+                parent=self,
+            )
+            for ln in self._live_log_buffer:
+                logs_pg.append_live_line(ln)
+            page = logs_pg
+        elif page_id == "settings":
+            from friday.launcher.pages.settings import SettingsPage
+
+            page = SettingsPage(
+                config_store=self.config_store,
+                on_settings_saved=self.refresh_dashboard_state,
+                on_reduce_animations_changed=self._on_reduce_animations_changed,
+                on_close_to_tray_changed=self._on_close_to_tray_changed,
+                parent=self,
+            )
+        else:
+            raise KeyError(f"Сторінку '{page_id}' не знайдено")
+
+        self.pages[page_id] = page
+        self.stack.addWidget(page)
+        return page
+
+    @property
+    def keys_page(self) -> Any:
+        return self._ensure_page("keys")
+
+    @property
+    def folders_page(self) -> Any:
+        return self._ensure_page("folders")
+
+    @property
+    def apps_page(self) -> Any:
+        return self._ensure_page("apps")
+
+    @property
+    def voice_page(self) -> Any:
+        return self._ensure_page("voice")
+
+    @property
+    def monitors_page(self) -> Any:
+        return self._ensure_page("monitors")
+
+    @property
+    def safety_page(self) -> Any:
+        return self._ensure_page("safety")
+
+    @property
+    def logs_page(self) -> Any:
+        return self._ensure_page("logs")
+
+    @property
+    def settings_page(self) -> Any:
+        return self._ensure_page("settings")
 
     def _init_tray(self) -> None:
         tray = QSystemTrayIcon(create_neon_orb_icon(64, active=False), self)
@@ -274,14 +370,20 @@ class LauncherWindow(QMainWindow):
         """Оновлює зведення конфігурації, Preflight-діагностику та список секретів для маскування логів."""
         self.app_config = self.config_store.load_merged()
         self.dashboard_page.update_summary(self.app_config)
+        self.dashboard_page.orb.set_reduce_animations(self.app_config.ui.reduce_animations)
         items = run_preflight_checks(self.app_config, self.env_store)
         self.dashboard_page.update_preflight(items)
-        self.process_manager.set_redacted_secrets(
-            [
-                self.env_store.get_key("GEMINI_API_KEY"),
-                self.env_store.get_key("TELEGRAM_API_HASH"),
-            ]
-        )
+        secrets_list = [
+            self.env_store.get_key("GEMINI_API_KEY"),
+            self.env_store.get_key("TELEGRAM_API_HASH"),
+        ]
+        self.process_manager.set_redacted_secrets(secrets_list)
+
+    def _on_reduce_animations_changed(self, reduce_anim: bool) -> None:
+        self.dashboard_page.orb.set_reduce_animations(reduce_anim)
+
+    def _on_close_to_tray_changed(self, enabled: bool) -> None:
+        self._minimize_to_tray_on_close = bool(enabled)
 
     def start_core(self) -> None:
         """Запускає дочірній процес ядра FRIDAY."""
@@ -317,13 +419,12 @@ class LauncherWindow(QMainWindow):
 
     def switch_page(self, page_id: str) -> None:
         """Перемикає активну сторінку в QStackedWidget і оновлює підсвічування кнопки в меню."""
-        if page_id not in self.pages:
-            raise KeyError(f"Сторінку '{page_id}' не знайдено")
+        target_page = self._ensure_page(page_id)
 
         if page_id == "dashboard":
             self.refresh_dashboard_state()
 
-        self.stack.setCurrentWidget(self.pages[page_id])
+        self.stack.setCurrentWidget(target_page)
         for pid, btn in self.nav_buttons.items():
             btn.setProperty("active", "true" if pid == page_id else "false")
             btn.style().unpolish(btn)
@@ -394,9 +495,8 @@ def create_launcher_app(argv: list[str] | None = None) -> tuple[QApplication, La
     assert isinstance(app, QApplication)
 
     fonts = load_bundled_fonts()
-    app.setStyleSheet(build_cyberpunk_qss(heading_font=fonts["heading"], mono_font=fonts["mono"]))
-
     window = LauncherWindow()
+    window.setStyleSheet(build_cyberpunk_qss(heading_font=fonts["heading"], mono_font=fonts["mono"]))
     return app, window
 
 

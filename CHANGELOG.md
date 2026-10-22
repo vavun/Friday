@@ -1,5 +1,28 @@
 # CHANGELOG — FRIDAY
 
+## [1.1.0] — Лаунчер (Під-етап L4 та Фінал): Сторінки Voice, Monitors, Safety, Logs, Settings і оптимізація холодного старту (< 0.4 с) (2026-10-22)
+
+### Додано
+- Реалізовано `friday.launcher.pages.voice` (`VoicePage`, `HotkeyCaptureEdit`, `detect_hotkey_conflicts`, `list_winmm_input_devices`, `MicLevelTestWorker`):
+  - Живе захоплення комбінацій клавіш із клавіатури для `voice`, `explain_clipboard`, `gesture`, `cancel`.
+  - Автоматичне виявлення дублікатів між гарячими клавішами та конфліктів із зарезервованими системними комбінаціями Windows (`Alt+Tab`, `Alt+F4`, `Ctrl+C`, `Ctrl+V` тощо).
+  - Вибір вхідного мікрофона через WinMM API та неблокуючий тест рівня сигналу (`MicLevelTestWorker` + `QProgressBar`), вибір STT-бекенду (`gemini` / `whisper_local`), мови (`uk` / `en`) та ліміту запису (`max_seconds`).
+- Реалізовано `friday.launcher.pages.monitors` (`MonitorsPage`, `MonitorIdentifyOverlay`):
+  - Відображення всіх підключених дисплеїв із роздільною здатністю робочої області (`work_area`), координатами та статусом (`ОСНОВНИЙ` / `ДОДАТКОВИЙ`).
+  - Кнопка `Ідентифікувати монітори`, що коротко показує напівпрозорі неонові банери з великим номером (`1`, `2`, `3`) у центрі кожного фізичного екрана.
+  - Вибір та збереження цільового монітора для відкриття документації (`[monitors].docs`).
+- Реалізовано `friday.launcher.pages.safety` (`SafetyPage`):
+  - Налаштування перемикачів Confirm Gate (`confirm_messages`, `confirm_file_changes`).
+  - Візуально заблокований перемикач `agent.auto_approve = false` (завжди вимкнений для безпеки) та панель перегляду заборонених деструктивних патернів (`DANGEROUS_PATTERNS`, `SECRET_NAMES`, `SECRET_SUFFIXES`) із `friday.safety` у режимі «лише читання».
+- Реалізовано `friday.launcher.pages.logs` (`LogsPage`):
+  - Живий перегляд останніх рядків `logs/friday.log` (через `QFileSystemWatcher`) та потоку виводу дочірнього процесу ядра з автоматичним маскуванням секретних ключів (`••••••••abcd`).
+  - Фільтрація за рівнем (`ALL`, `INFO`, `WARNING`, `ERROR`, `DEBUG`) та кнопка `Відкрити папку логів`.
+- Реалізовано `friday.launcher.pages.settings` (`SettingsPage`):
+  - Керування автозапуском із Windows через ярлик/скрипт `FridayAssistantAutostart.cmd` у папці `Startup` поточного користувача (`pythonw.exe -m friday.launcher --minimized`, не потребує прав Адміністратора).
+  - Перемикачі запуску згорнутим у трей (`start_minimized`), згортання в трей при закритті вікна, зменшення анімацій (`reduce_animations`), вибір рівня логів (`log_level`) та мови інтерфейсу (`language`).
+- Оптимізовано холодний старт `LauncherWindow` у `friday.launcher.app` за допомогою лінивої ініціалізації вкладок (`_ensure_page`): час відкриття вікна становить **`367.8 мс`** (ціль `< 1000 мс`), навантаження CPU у згорнутому в трей стані — **`0.0%`**.
+- Додано юніт- та GUI-тести `tests/test_launcher_stage4.py` (усього в проєкті **70 зелених тестів**).
+
 ## [1.0.0] — Етапи 5–9: Введення тексту, Вебпошук, Помилка → Документація, Telegram, Antigravity CLI та Безпека/Профілювання (2026-10-22)
 
 ### Додано
