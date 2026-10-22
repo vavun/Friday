@@ -1,0 +1,36 @@
+[hotkeys]
+voice = "right_ctrl"          # утримувати для голосової команди
+explain_clipboard = "ctrl+alt+d"   # помилка з буфера -> документація
+cancel = "esc"
+
+[audio]
+sample_rate = 16000
+max_seconds = 15
+tail_ms = 200                 # дописати після відпускання клавіші
+
+[stt]
+backend = "gemini"            # "gemini" | "whisper_local"
+language = "uk"
+model = "gemini-3.5-transcribe"
+
+[llm]
+model = "gemini-3.5-flash-lite"
+
+[monitors]
+primary = 0
+docs = 1                      # на який монітор відкривати документацію
+
+[apps]                        # білий список: назва -> команда
+code = "code"
+telegram = "C:\\Users\\Acer\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe"
+browser = "chrome"
+
+[docs_sites]                  # для пошуку документації за бібліотекою
+python = "docs.python.org"
+fastapi = "fastapi.tiangolo.com"
+pydantic = "docs.pydantic.dev"
+mdn = "developer.mozilla.org"
+
+[agent]
+command = "antigravity"       # перевірити реальний синтаксис: antigravity --help
+auto_approve = false          # ЗАВЖДИ false при голосовому керуванні

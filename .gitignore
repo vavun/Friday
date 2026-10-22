@@ -1,0 +1,30 @@
+# Секрети та сесії
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+env/
+
+# Тимчасові файли та логи
+temp/
+logs/
+*.log
+requirements.txt
+
+
+# IDE
+.vscode/
+.idea/
+.vs/
+.pytest_cache/
