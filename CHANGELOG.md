@@ -1,5 +1,19 @@
 # CHANGELOG — FRIDAY
 
+## [0.4.0] — Етап 3: Менеджер вікон і моніторів (Fast Path) (2026-10-22)
+
+### Додано
+- Реалізовано `friday.util.monitors` (`enable_dpi_awareness`, `list_monitors` через `EnumDisplayMonitors` + `GetMonitorInfo` із вибором `Work` area замість повного екрана).
+- Реалізовано `friday.skills.windows` (`WindowManager`, `RealWin32Backend`, `WindowMoveSkill`, `WindowResizeSkill`, `WindowFocusSkill`):
+  - Пошук вікон за процесом і заголовком з кешуванням HWND та перевіркою `IsWindow`.
+  - Коректне переміщення між моніторами (`SW_RESTORE` → `SetWindowPos` → `SW_MAXIMIZE`).
+  - Снап (`left`/`right`/`center`) з компенсацією невидимих рамок Windows 10/11 через `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)`.
+  - Зміна розміру (`bigger`/`smaller` з кроком 12% від `work_area`).
+  - Надійний фокус (`SetForegroundWindow` через `AttachThreadInput` + короткий Alt-трюк) та захист від падінь при UIPI (вікна з правами Адміністратора).
+- Реалізовано `friday.skills.apps` (`AppLauncher`, `AppLaunchSkill`): запуск виключно з білого списку `[apps]` у `config.toml` без `shell=True`.
+- Реалізовано `friday.skills.base.SkillRegistry` та утиліту командного рядка `python -m friday.dev` (`monitors`, `window move/snap/resize/focus`, `app launch`).
+- Додано юніт-тести `tests/test_stage3.py`.
+
 ## [0.3.0] — Етап 2: Розпізнавання мовлення (STT) (2026-10-22)
 
 ### Додано
