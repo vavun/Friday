@@ -20,38 +20,33 @@ except ImportError:  # pragma: no cover
 
 
 class FeedbackManager:
-    """Керує короткими звуковими індикаторами та спливаючими сповіщеннями (toast)."""
+    """Керує спливаючими сповіщеннями Windows Toast (звукові сигнали вимкнено за замовчуванням)."""
 
     def __init__(
         self,
-        enabled_sound: bool = True,
+        enabled_sound: bool = False,
         enabled_toast: bool = True,
         beep_fn: Callable[[int, int], None] | None = None,
     ) -> None:
-        self.enabled_sound = enabled_sound
+        self.enabled_sound = False
         self.enabled_toast = enabled_toast
-        self._beep_fn = beep_fn or (winsound.Beep if winsound is not None else None)
+        self._beep_fn = beep_fn
 
     def _beep_sync(self, freq_hz: int, duration_ms: int) -> None:
-        """Синхронний короткий сигнал."""
-        if not self.enabled_sound or self._beep_fn is None:
-            return
-        try:
-            self._beep_fn(freq_hz, duration_ms)
-        except Exception as exc:
-            log.debug("Не вдалося відтворити звуковий сигнал: %s", exc)
+        """Звукові сигнали вимкнено на вимогу користувача."""
+        return
 
     async def beep_start(self) -> None:
-        """Короткий високий сигнал початку запису."""
-        await asyncio.to_thread(self._beep_sync, 880, 45)
+        """Вимкнено (без звуку початку запису)."""
+        return
 
     async def beep_stop(self) -> None:
-        """Короткий нижчий сигнал завершення запису."""
-        await asyncio.to_thread(self._beep_sync, 587, 45)
+        """Вимкнено (без звуку завершення запису)."""
+        return
 
     async def beep_error(self) -> None:
-        """Сигнал помилки або скасування."""
-        await asyncio.to_thread(self._beep_sync, 330, 90)
+        """Вимкнено (при помилці надсилається toast-сповіщення замість звуку)."""
+        return
 
     def _toast_sync(self, title: str, message: str) -> None:
         """Синхронний показ Windows Toast через winotify."""

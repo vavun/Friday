@@ -201,4 +201,4 @@ async def test_hold_to_talk_pipeline_and_latency(tmp_path: Path) -> None:
     assert app.state == AssistantState.IDLE
     assert app.last_audio is not None
     assert (tmp_path / "latest.wav").exists()
-    assert len(beeps) == 2
+    assert len(beeps) == 0

@@ -186,17 +186,19 @@ class FridayApp:
         await self._execute_intent(intent)
 
     async def _on_voice_press(self, event: HotkeyEvent) -> None:
-        """Старт запису по утриманню клавіші."""
+        """Старт запису по утриманню клавіші (без звукового сигналу)."""
         if self._state == AssistantState.LISTENING:
             return
         self.transition(AssistantState.LISTENING)
         started = await asyncio.to_thread(self.recorder.start)
         latency_ms = (time.perf_counter() - event.timestamp) * 1000.0
         log.info("⏱ Затримка [hotkey_to_record_start]: %.2f мс", latency_ms)
-        if started:
-            asyncio.create_task(self.feedback.beep_start())
-        else:
+        if not started:
             self.transition(AssistantState.IDLE)
+            await self.feedback.notify(
+                "Помилка мікрофона",
+                "Не вдалося розпочати запис із мікрофона. Перевірте аудіопристрій.",
+            )
 
     async def _on_voice_release(self, event: HotkeyEvent) -> None:
         """Дозапис tail_ms після відпускання клавіші, зупинка запису, STT, роутинг та виконання."""
@@ -209,7 +211,6 @@ class FridayApp:
             await asyncio.sleep(tail_s)
 
         wav_bytes = await asyncio.to_thread(self.recorder.stop)
-        asyncio.create_task(self.feedback.beep_stop())
 
         if not wav_bytes:
             self.transition(AssistantState.IDLE)
@@ -225,7 +226,6 @@ class FridayApp:
         except Exception as exc:
             log.exception("Помилка розпізнавання мовлення (STT): %s", exc)
             self.transition(AssistantState.IDLE)
-            await self.feedback.beep_error()
             await self.feedback.notify("Помилка STT", str(exc))
             return
 
@@ -295,7 +295,6 @@ class FridayApp:
                 log.info("Навичку '%s' розпізнано, але ще не підключено до реєстру.", intent.skill)
         except Exception as exc:
             log.exception("Помилка виконання навички %s: %s", intent.skill, exc)
-            await self.feedback.beep_error()
             await self.feedback.notify(f"Помилка {intent.skill}", str(exc))
         finally:
             self.transition(AssistantState.IDLE)
@@ -322,10 +321,8 @@ class FridayApp:
         """Скасування запису, перетягування вікна або поточної дії по Esc."""
         if self.gesture_controller is not None and self.gesture_controller.is_running:
             await asyncio.to_thread(self.gesture_controller.stop, True)
-            asyncio.create_task(self.feedback.beep_error())
         elif self.gesture_controller is not None and self.gesture_controller.mover.active_session is not None:
             await asyncio.to_thread(self.gesture_controller.mover.cancel_and_restore)
-            asyncio.create_task(self.feedback.beep_error())
 
         if self.recorder.recording:
             await asyncio.to_thread(self.recorder.stop)
@@ -333,7 +330,6 @@ class FridayApp:
         if self._state != AssistantState.IDLE:
             log.info("Дію скасовано користувачем (Esc).")
             self.transition(AssistantState.IDLE)
-            asyncio.create_task(self.feedback.beep_error())
 
     async def _safe_warmup_whisper(self) -> None:
         """Безпечний прогрів Faster-Whisper без падіння основного процесу при помилці завантаження."""
