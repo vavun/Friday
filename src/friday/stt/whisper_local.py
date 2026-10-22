@@ -16,6 +16,20 @@ from friday.util.timing import measure_time
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 log = logging.getLogger("friday.stt.whisper_local")
 
+# Захисний патч сумісності для PyAV (у PyAV 19+ прибрано metadata_errors, але faster-whisper передає його)
+try:
+    import av
+    if hasattr(av, "open"):
+        _orig_av_open = av.open
+
+        def _compat_av_open(*args: Any, **kwargs: Any) -> Any:
+            kwargs.pop("metadata_errors", None)
+            return _orig_av_open(*args, **kwargs)
+
+        av.open = _compat_av_open  # type: ignore[assignment]
+except Exception:
+    pass
+
 WHISPER_INITIAL_PROMPT_UK = (
     "Голосові команди українською мовою зі вставками англійських термінів: "
     "FastAPI, pydantic, traceback, git, TypeError, KeyError, ValueError, pytest, "
