@@ -194,7 +194,7 @@ class FridayApp:
         if self._state == AssistantState.LISTENING:
             return
         self.transition(AssistantState.LISTENING)
-        started = await asyncio.to_thread(self.recorder.start)
+        started = self.recorder.start()
         latency_ms = (time.perf_counter() - event.timestamp) * 1000.0
         log.info("⏱ Затримка [hotkey_to_record_start]: %.2f мс", latency_ms)
         if not started:

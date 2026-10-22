@@ -36,7 +36,7 @@ ResizeMode = Literal["bigger", "smaller", "maximize", "restore"]
 
 # Словник синонімів цільових вікон -> патерни у назві процесу або заголовку вікна
 TARGET_ALIASES: dict[str, tuple[str, ...]] = {
-    "browser": ("chrome", "msedge", "firefox", "brave", "opera"),
+    "browser": ("chrome", "msedge", "edge", "firefox", "brave", "opera", "browser", "avastbrowser", "vivaldi"),
     "chrome": ("chrome",),
     "code": ("code", "visual studio code"),
     "vscode": ("code", "visual studio code"),
@@ -270,6 +270,13 @@ class WindowManager:
             proc_lower = entry.process_name.lower()
             if any(p in proc_lower for p in patterns):
                 self._hwnd_cache[key] = entry.hwnd
+                log.info(
+                    "Знайдено вікно для '%s' за назвою процесу: HWND=%d, process='%s', title='%s'",
+                    target,
+                    entry.hwnd,
+                    entry.process_name,
+                    entry.title,
+                )
                 return entry.hwnd
 
         # 2. Збіг за заголовком вікна
@@ -277,28 +284,64 @@ class WindowManager:
             title_lower = entry.title.lower()
             if any(p in title_lower for p in patterns):
                 self._hwnd_cache[key] = entry.hwnd
+                log.info(
+                    "Знайдено вікно для '%s' за заголовком: HWND=%d, process='%s', title='%s'",
+                    target,
+                    entry.hwnd,
+                    entry.process_name,
+                    entry.title,
+                )
                 return entry.hwnd
 
         raise LookupError(f"Вікно для '{target}' не знайдено серед відкритих програм")
 
-    def _resolve_monitor(self, monitor_idx: int | None, hwnd: int) -> MonitorInfo:
-        """Визначає цільовий монітор (підтримує як 0-based індекси 0, 1, так і 1-based номери 1, 2)."""
+    def _resolve_monitor(
+        self,
+        monitor_idx: int | None,
+        hwnd: int,
+        is_1based: bool = False,
+        is_snap: bool = False,
+    ) -> MonitorInfo:
+        """Визначає цільовий монітор. Підтримує 1-based номери (1, 2, 3), 0-based індекси та перемикання."""
         monitors = self.backend.get_monitors()
         if not monitors:
             raise RuntimeError("Не знайдено жодного монітора")
 
-        if monitor_idx is None:
-            cur_idx = self.backend.get_window_monitor_index(hwnd, monitors)
+        cur_idx = self.backend.get_window_monitor_index(hwnd, monitors)
+
+        # Якщо монітор не вказано:
+        if monitor_idx is None or monitor_idx == -1:
+            # Для операцій снапу ("прикріпи вліво") залишаємось на поточному моніторі
+            if is_snap:
+                return monitors[cur_idx]
+            # Для операцій перенесення ("перенеси браузер") перемикаємо на наступний монітор
+            if len(monitors) > 1:
+                next_idx = (cur_idx + 1) % len(monitors)
+                log.info("Монітор не вказано: перехід з монітора #%d на #%d (усього: %d)", cur_idx, next_idx, len(monitors))
+                return monitors[next_idx]
             return monitors[cur_idx]
 
-        # Якщо користувач каже "на другий монітор" (2) при 2 моніторах -> індекс 1.
-        # Якщо передано 0 -> індекс 0. Якщо передано індекс у межах [0, len-1] -> використовуємо його,
-        # але якщо передано monitor_idx == len(monitors) (напр. 2 при 2 моніторах) -> monitor_idx - 1.
+        # Якщо виклик явно 1-based (з голосового роутера або CLI):
+        if is_1based:
+            idx_0 = monitor_idx - 1
+            if 0 <= idx_0 < len(monitors):
+                target_mon = monitors[idx_0]
+                log.info("Вибір монітора за 1-based номером %d -> монітор #%d (%s)", monitor_idx, target_mon.index, target_mon.device)
+                return target_mon
+            return monitors[-1]
+
+        # Для тестів та зворотної сумісності (коли monitor_idx == len(monitors), напр. 2 при 2 моніторах):
+        if monitor_idx == len(monitors) and len(monitors) > 1:
+            return monitors[monitor_idx - 1]
+
+        # 0-based індекс (якщо передано з внутрішніх викликів типу docs_lookup або gesture_controller)
         if 0 <= monitor_idx < len(monitors):
             return monitors[monitor_idx]
+
         if 1 <= monitor_idx <= len(monitors):
             return monitors[monitor_idx - 1]
-        # Якщо монітор всього один, повертаємо єдиний доступний
+
+        log.info("Запитаний номер монітора %d за межами [1..%d], обрано #%d", monitor_idx, len(monitors), monitors[-1].index)
         return monitors[-1]
 
     def _apply_dwm_compensated_pos(
@@ -323,10 +366,12 @@ class WindowManager:
         hwnd: int,
         monitor_idx: int | None = None,
         mode: MoveMode = "maximize",
+        is_1based: bool = False,
     ) -> dict[str, Any]:
         """Переміщує вікно на вказаний монітор у режимі maximize / left / right / center."""
         with measure_time("window.move"):
-            mon = self._resolve_monitor(monitor_idx, hwnd)
+            is_snap = mode in {"left", "right", "center"}
+            mon = self._resolve_monitor(monitor_idx, hwnd, is_1based=is_1based, is_snap=is_snap)
             work = mon.work_area
 
             # Спочатку обов'язково SW_RESTORE, інакше максимізоване вікно не змінить монітор
@@ -347,6 +392,10 @@ class WindowManager:
                 bounds = (work.left, work.top, work.width, work.height)
             else:
                 bounds = self._snap_on_work_area(hwnd, work, mode)
+
+            # Обов'язково виводимо вікно на передній план та фокусуємо його
+            self.backend.set_foreground(hwnd)
+            log.info("Вікно HWND=%d переміщено на монітор #%d (%s, mode=%s)", hwnd, mon.index, mon.device, mode)
 
             return {
                 "hwnd": hwnd,
@@ -454,7 +503,7 @@ class WindowMoveSkill:
 
         def _run() -> dict[str, Any]:
             hwnd = self.manager.find_window(target)
-            return self.manager.move_to_monitor(hwnd, monitor_idx=monitor_idx, mode=mode)
+            return self.manager.move_to_monitor(hwnd, monitor_idx=monitor_idx, mode=mode, is_1based=True)
 
         return await asyncio.to_thread(_run)
 

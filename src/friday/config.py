@@ -52,7 +52,7 @@ class LlmConfig(BaseModel):
     """Параметри LLM-парсера команд."""
 
     model: str = "gemini-3.5-flash-lite"
-    timeout_s: float = Field(default=5.0, gt=0.5, le=30.0)
+    timeout_s: float = Field(default=12.0, gt=0.5, le=30.0)
 
 
 class MonitorsConfig(BaseModel):

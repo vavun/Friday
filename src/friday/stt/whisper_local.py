@@ -73,12 +73,14 @@ class WhisperLocalTranscriber:
                         "Пакет 'faster-whisper' не встановлено. "
                         "Встановіть через: .\\.venv\\Scripts\\pip.exe install -e '.[whisper]'"
                     ) from exc
+                threads = min(4, os.cpu_count() or 4)
                 self._model = WhisperModel(
                     self.model_size,
                     device="cpu",
                     compute_type=self.compute_type,
+                    cpu_threads=threads,
                 )
-        log.info("Модель faster-whisper (%s, %s) завантажено.", self.model_size, self.compute_type)
+        log.info("Модель faster-whisper (%s, %s, cpu_threads=%d) завантажено.", self.model_size, self.compute_type, min(4, os.cpu_count() or 4))
         return self._model
 
     async def warmup(self) -> None:
@@ -105,7 +107,7 @@ class WhisperLocalTranscriber:
             io.BytesIO(wav_bytes),
             language=self.config.language or "uk",
             initial_prompt=WHISPER_INITIAL_PROMPT_UK,
-            beam_size=2,
+            beam_size=1,
             vad_filter=True,
         )
         text = " ".join(seg.text.strip() for seg in segments if getattr(seg, "text", "").strip())

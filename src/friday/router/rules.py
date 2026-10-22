@@ -108,11 +108,15 @@ ACTION_VERBS_PATTERN = (
 
 
 def normalize_command_text(raw: str) -> str:
-    """Нормалізує текст команди: нижній регістр, апострофи, зайві пробіли та кінцева пунктуація."""
+    """Нормалізує текст команди: нижній регістр, апострофи, лапки, виправлення типових артефактів Whisper."""
     text = (raw or "").strip()
     text = text.replace("’", "'").replace("`", "'").replace("ʼ", "'")
+    text = re.sub(r'["«»“”„‟]', "", text)
     text = text.lower()
     text = re.sub(r"[!?.,;]+$", "", text).strip()
+    # Виправлення типових фонетичних злипань Whisper для розпізнавання технічних програм
+    text = re.sub(r"\bнівс-?код\b", "в ній vs code", text)
+    text = re.sub(r"\bв\s+ні\s+(?=vs|вс|код|блокнот)", "в ній ", text)
     text = re.sub(r"\s+", " ", text)
     return text
 
@@ -222,9 +226,9 @@ def _match_single_action(
 
     # 2. Створення папки або файлу (file.create)
     m_create_folder = re.match(
-        r"^(?:створи\w*|зроби\w*)\s+(?:папку|директорію|каталог)\s+(?:під\s+назвою\s+|з\s+назвою\s+)?([^\s]+|\"[^\"]+\")"
+        r"^(?:створи\w*|зроби\w*)\s+(?:нову\s+|новий\s+)?(?:папку|директорію|каталог)\s+(?:під\s+назвою\s+|з\s+назвою\s+)?([^\s]+|\"[^\"]+\")"
         r"(?:\s+(?:на|в|у)\s+(робочому\s+столі|робочий\s+стіл|десктопі|десктоп|завантаженнях|завантаження|документах|документи|проєкті|проєкт|проекті|проект|[^\s]+))?"
-        r"(?:\s+(?:і|та|й)?\s*відкри\w*(?:\s+(?:її|його|цю\s+папку))?(?:\s+(?:в|у|через)\s+(\w+))?)?$",
+        r"(?:\s+(?:і|та|й)?\s*відкри\w*(?:\s+(?:її|його|цю\s+папку))?(?:\s+(?:в|у|через)\s+(.+))?)?$",
         norm,
     )
     if m_create_folder:
@@ -312,19 +316,21 @@ def _match_single_action(
             confidence=0.96,
         )
 
-    # Відкриття раніше згаданого / створеного файлу у програмі (наприклад: "і відкрий в блокноті", "відкрий його в коді")
+    # Відкриття раніше згаданого / створеного файлу у програмі (наприклад: "і відкрий в блокноті", "відкрий його в коді", "відкрив в ній vs code")
     m_open_prev = re.match(
-        r"^(?:відкри\w*|покажи)\s*(?:його|її|цей\s+файл|цю\s+папку)?\s+(?:в|у|через)\s+(\w+)$",
+        r"^(?:відкри\w*|покажи)\s+(?:(?:його|її|це|цей\s+файл|цю\s+папку)\s+(?:в|у|через)\s+(.+)|(?:його|її|це|цей\s+файл|цю\s+папку)|(?:в|у|через|в\s+ній|у\s+ній)\s+(.+))$",
         norm,
     )
     if m_open_prev:
-        app_hint = m_open_prev.group(1).strip()
+        g1, g2 = m_open_prev.group(1), m_open_prev.group(2)
+        raw_app = (g1 or g2 or "").strip()
+        app_hint = re.sub(r"^(?:ній|ньому|цьому|цій)\s+", "", raw_app).strip()
         return CommandIntent(
             skill="file.open",
             args={
                 "target": previous_target if previous_target and previous_target != "active" else "останній",
-                "prefer_dir": False,
-                "app": app_hint,
+                "prefer_dir": None,
+                "app": app_hint if app_hint else None,
             },
             confidence=0.96,
         )
@@ -348,13 +354,21 @@ def _match_single_action(
         )
 
     # 4. Відправка повідомлення у Telegram (telegram.send)
+    # Варіант 1: "напиши Олегу в телеграм що / : / текст"
     m_tg = re.match(
         r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+([а-яіїєґa-z0-9_]+(?:\s+[а-яіїєґa-z0-9_]+){0,2})\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s*(?:що|про те що|:)?\s*(.+)$",
         norm,
     )
     if not m_tg:
+        # Варіант 2: "напиши в телеграм Олегу: текст" або "напиши в телеграм Олегу що текст"
         m_tg = re.match(
-            r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s+([а-яіїєґa-z0-9_]+(?:\s+[а-яіїєґa-z0-9_]+){0,1})\s*(?:що|:)?\s*(.+)$",
+            r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s+([а-яіїєґa-z0-9_]+(?:\s+[а-яіїєґa-z0-9_]+){0,1})\s*(?:що|про те що|:)\s*(.+)$",
+            norm,
+        )
+    if not m_tg:
+        # Варіант 3: "напиши в телеграм Олегу текст" (без розділювача, одне слово контакт і далі повідомлення)
+        m_tg = re.match(
+            r"^(?:напиш\w*|відправ\w*|надішл\w*|скин\w*)\s+(?:в|у)\s+(?:телеграм\w*|тг|telegram)\s+([а-яіїєґa-z0-9_]+)\s+(.+)$",
             norm,
         )
     if m_tg:
@@ -435,19 +449,45 @@ def _match_single_action(
         )
 
     # 10. Переміщення вікна між моніторами або снап (window.move)
+    # Варіант 1: з явною вказівкою монітора ("перенеси хром на сусідній монітор ліворуч", "перенеси браузер на другий монітор")
     m_move = re.match(
-        r"^(?:перенес\w*|перекин\w*|відправ\w*|переміст\w*|посун\w*|кин\w*)\s*(.*?)\s+на\s+(?:перш\w+|основн\w+|головн\w+|друг\w+|інш\w+|сусідн\w+|прав\w+|трет\w+|лів\w+|[123])\s+монітор\w*(.*)$",
+        r"^(?:перенес\w*|перекин\w*|відправ\w*|переміст\w*|посун\w*|кин\w*)"
+        r"(?:\s+(.*?))?"
+        r"\s+на\s+((?:перш\w+|основн\w+|головн\w+|друг\w+|інш\w+|сусідн\w+|прав\w+|трет\w+|лів\w+|[123])\s+монітор\w*)"
+        r"(?:\s+(.*))?$",
         norm,
     )
     if m_move:
-        raw_t = m_move.group(1).strip()
+        raw_t = (m_move.group(1) or "").strip()
+        mon_phrase = m_move.group(2)
+        rest = m_move.group(3) or ""
         target = resolve_target_name(raw_t, custom_synonyms) if raw_t else previous_target
-        monitor_idx, _ = _extract_monitor_index(norm, default=2)
-        snap_mode, _ = _extract_snap_mode(m_move.group(2), default="maximize")
+        monitor_idx, _ = _extract_monitor_index(mon_phrase, default=2)
+        snap_mode, _ = _extract_snap_mode(rest, default="maximize")
         return CommandIntent(
             skill="window.move",
             args={"target": target, "monitor": monitor_idx, "mode": snap_mode},
             confidence=0.96,
+        )
+
+    # Варіант 2: без явної фрази "на ... монітор" ("перенеси браузер", "перенеси вікно ліворуч")
+    m_move_bare = re.match(
+        r"^(?:перенес\w*|перекин\w*|відправ\w*|переміст\w*|посун\w*|кин\w*)(?:\s+(.+))?$",
+        norm,
+    )
+    if m_move_bare:
+        raw = (m_move_bare.group(1) or "").strip()
+        snap_mode, has_snap = _extract_snap_mode(raw, default="maximize")
+        cleaned_target = re.sub(
+            r"\b(ліворуч|вліво|зліва|на лівий бік|на ліву половину|в ліву сторону|у ліву сторону|праворуч|вправо|справа|на правий бік|на праву половину|в праву сторону|у праву сторону|по центру|в центр|у центрі|посередині|розгорни|на весь екран|максимізуй)\b",
+            "",
+            raw,
+        ).strip()
+        target = resolve_target_name(cleaned_target, custom_synonyms) if cleaned_target else previous_target
+        return CommandIntent(
+            skill="window.move",
+            args={"target": target, "monitor": None, "mode": snap_mode},
+            confidence=0.95,
         )
 
     m_snap = re.match(
