@@ -157,9 +157,63 @@ def main(argv: list[str] | None = None) -> int:
         client = TelegramClient(str(DEFAULT_SESSION_PATH), int(cfg.secrets.telegram_api_id), cfg.secrets.telegram_api_hash)
 
         if args.action == "login":
+            import getpass
+            import re
+            import telethon.errors
+
             async def _do_login() -> None:
                 log.info("Запуск одноразової авторизації Telegram (Telethon)...")
-                await client.start()
+                await client.connect()
+                if await client.is_user_authorized():
+                    me = await client.get_me()
+                    log.info("✅ Вже авторизовано як: %s (ID: %s)", getattr(me, "first_name", ""), me.id)
+                    await client.disconnect()
+                    return
+
+                phone = input("\n📱 Введіть ваш номер телефону у форматі +380...: ").strip()
+                if not phone.startswith("+"):
+                    phone = "+" + phone
+
+                try:
+                    sent = await client.send_code_request(phone)
+                except telethon.errors.FloodWaitError as e:
+                    log.error(
+                        "⏳ Telegram тимчасово обмежив запити через невдалі спроби. Зачекайте %d с (~%d хв) і спробуйте знову.",
+                        e.seconds,
+                        max(1, e.seconds // 60),
+                    )
+                    await client.disconnect()
+                    return
+                except Exception as e:
+                    log.error("❌ Помилка відправки коду: %s", e)
+                    await client.disconnect()
+                    return
+
+                type_name = type(sent.type).__name__
+                if "App" in type_name:
+                    print("\n" + "=" * 60)
+                    print("👉 [ВАЖЛИВО] Код надіслано в ДОДАТОК Telegram!")
+                    print("   Відкрийте Telegram на телефоні або ПК та перевірте чат 'Telegram' (з синьою галочкою).")
+                    print("=" * 60 + "\n")
+                elif "Sms" in type_name:
+                    print(f"\n👉 [ВАЖЛИВО] Код надіслано в SMS на номер {phone}!\n")
+                else:
+                    print(f"\n👉 Код надіслано через: {type_name}\n")
+
+                raw_code = input("🔢 Введіть 5-значний цифровий код з повідомлення: ").strip()
+                m = re.search(r"\b\d{5,6}\b", raw_code)
+                code = m.group(0) if m else raw_code
+
+                try:
+                    await client.sign_in(phone, code, phone_code_hash=sent.phone_code_hash)
+                except telethon.errors.SessionPasswordNeededError:
+                    pwd = getpass.getpass("🔒 Введіть ваш 2FA пароль (хмарний пароль Telegram): ")
+                    await client.sign_in(password=pwd)
+                except telethon.errors.PhoneCodeInvalidError:
+                    log.error("❌ Невірний код підтвердження.")
+                    await client.disconnect()
+                    return
+
                 me = await client.get_me()
                 log.info("✅ Авторизація успішна! Увійшли як: %s (ID: %s)", getattr(me, "first_name", ""), me.id)
                 await client.disconnect()
