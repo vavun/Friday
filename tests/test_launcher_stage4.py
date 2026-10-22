@@ -130,6 +130,13 @@ def test_monitors_page_identify_and_save_docs_role(tmp_path: Path) -> None:
     page.close_identify_overlays()
     assert len(page._active_overlays) == 0
 
+    # Симуляція реального кліку на кнопку QPushButton (передає checked=False у слот)
+    page.btn_identify.click()
+    assert len(page._active_overlays) == 2
+    assert page._active_overlays[0]._close_timer is not None
+    assert page._active_overlays[0]._close_timer.isActive() is True
+    page.close_identify_overlays()
+
 
 def test_safety_page_locks_auto_approve_and_saves_flags(tmp_path: Path) -> None:
     """SafetyPage тримає auto_approve заблокованим (False) і зберігає прапорці підтвердження."""

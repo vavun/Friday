@@ -24,7 +24,14 @@ from friday.util.monitors import MonitorInfo, list_monitors
 class MonitorIdentifyOverlay(QWidget):
     """Напівпрозорий неоновий оверлей із великим номером монітора, що автоматично зникає."""
 
-    def __init__(self, display_number: int, device_name: str, x: int, y: int) -> None:
+    def __init__(
+        self,
+        display_number: int,
+        device_name: str,
+        x: int,
+        y: int,
+        auto_close_ms: int = 1800,
+    ) -> None:
         super().__init__(
             None,
             Qt.WindowType.Tool
@@ -32,6 +39,8 @@ class MonitorIdentifyOverlay(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint,
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setFixedSize(260, 180)
         self.move(x, y)
         self.setStyleSheet(
@@ -60,6 +69,17 @@ class MonitorIdentifyOverlay(QWidget):
 
         layout.addWidget(num_lbl)
         layout.addWidget(sub_lbl)
+
+        self._close_timer: QTimer | None = None
+        if not isinstance(auto_close_ms, bool) and auto_close_ms > 0:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self.close)
+            timer.start(int(auto_close_ms))
+            self._close_timer = timer
+
+    def mousePressEvent(self, event: object) -> None:  # noqa: ARG002
+        self.close()
 
 
 class MonitorsPage(BasePage):
@@ -95,10 +115,10 @@ class MonitorsPage(BasePage):
         action_row = QHBoxLayout()
         self.btn_identify = QPushButton("Ідентифікувати монітори")
         self.btn_identify.setObjectName("PrimaryButton")
-        self.btn_identify.clicked.connect(self.identify_monitors)
+        self.btn_identify.clicked.connect(lambda _checked=False: self.identify_monitors(1800))
 
         self.btn_refresh = QPushButton("Оновити список")
-        self.btn_refresh.clicked.connect(self.refresh_monitors_ui)
+        self.btn_refresh.clicked.connect(lambda _checked=False: self.refresh_monitors_ui())
 
         action_row.addWidget(self.btn_identify)
         action_row.addWidget(self.btn_refresh)
@@ -191,18 +211,25 @@ class MonitorsPage(BasePage):
             self.combo_docs_monitor.addItem("Монітор #2 (індекс 1)", 1)
             self.combo_docs_monitor.setCurrentIndex(min(1, cfg.monitors.docs))
 
-    def identify_monitors(self, duration_ms: int = 1600) -> int:
+    def identify_monitors(self, duration_ms: int = 1800) -> int:
         """Коротко показує великий номер на кожному підключеному моніторі."""
-        for old in self._active_overlays:
-            old.close()
-        self._active_overlays.clear()
+        if isinstance(duration_ms, bool):
+            duration_ms = 1800
+
+        self.close_identify_overlays()
 
         monitors = self.get_current_monitors()
         for mon in monitors:
             w = mon.work_area
             cx = w.left + max(0, (w.width - 260) // 2)
             cy = w.top + max(0, (w.height - 180) // 2)
-            overlay = MonitorIdentifyOverlay(mon.index + 1, mon.device, cx, cy)
+            overlay = MonitorIdentifyOverlay(
+                mon.index + 1,
+                mon.device,
+                cx,
+                cy,
+                auto_close_ms=duration_ms,
+            )
             overlay.show()
             self._active_overlays.append(overlay)
 
@@ -211,9 +238,16 @@ class MonitorsPage(BasePage):
         return len(self._active_overlays)
 
     def close_identify_overlays(self) -> None:
-        for ov in self._active_overlays:
-            ov.close()
+        for ov in list(self._active_overlays):
+            try:
+                ov.close()
+            except Exception:
+                pass
         self._active_overlays.clear()
+
+    def hideEvent(self, event: object) -> None:
+        self.close_identify_overlays()
+        super().hideEvent(event)  # type: ignore[arg-type]
 
     def save_monitors_config(self) -> None:
         """Зберігає вибраний індекс монітора для документації у config.local.toml."""

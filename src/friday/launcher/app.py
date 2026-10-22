@@ -437,8 +437,14 @@ class LauncherWindow(QMainWindow):
             return widget.page_id
         return ""
 
+    def _close_auxiliary_overlays(self) -> None:
+        mon_page = self.pages.get("monitors")
+        if mon_page is not None and hasattr(mon_page, "close_identify_overlays"):
+            mon_page.close_identify_overlays()  # type: ignore[attr-defined]
+
     def hide_to_tray(self) -> None:
         """Приховує вікно лаунчера в трей (усі анімації автоматично зупиняються через hideEvent -> ~0% CPU)."""
+        self._close_auxiliary_overlays()
         self.hide()
 
     def restore_from_tray(self) -> None:
@@ -467,6 +473,7 @@ class LauncherWindow(QMainWindow):
         self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._close_auxiliary_overlays()
         if not self._force_quit and self._minimize_to_tray_on_close and self.tray_icon is not None:
             event.ignore()
             self.hide_to_tray()
