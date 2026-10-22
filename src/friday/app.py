@@ -14,8 +14,18 @@ from friday.feedback import FeedbackManager
 from friday.gesture.controller import GestureDragSkill, GestureRuntimeController
 from friday.hotkeys import HotkeyEvent, HotkeyEventType, HotkeyListener
 from friday.router import CommandIntent, CommandRouter
+from friday.safety import (
+    build_confirmation_prompt,
+    should_require_confirmation,
+    validate_intent_safety,
+)
+from friday.skills.agent_cli import AgentCliService, AgentRunSkill
 from friday.skills.apps import AppLauncher, AppLaunchSkill
 from friday.skills.base import SkillRegistry
+from friday.skills.docs_lookup import DocsLookupService, DocsLookupSkill
+from friday.skills.telegram import TelegramSendSkill, TelegramService
+from friday.skills.typing_text import TextTypeSkill
+from friday.skills.web import WebBrowserService, WebSearchSkill
 from friday.skills.windows import (
     WindowFocusSkill,
     WindowManager,
@@ -71,7 +81,7 @@ class FridayApp:
         self._pending_intent: CommandIntent | None = None
 
     def _build_default_registry(self) -> SkillRegistry:
-        """Реєструє базові навички керування вікнами та запуску програм."""
+        """Реєструє всі навички ядра FRIDAY (Етапи 3–8)."""
         reg = SkillRegistry()
         wm = WindowManager()
         reg.register(WindowMoveSkill(wm))
@@ -82,6 +92,34 @@ class FridayApp:
                 AppLauncher(
                     self.config.apps,
                     custom_synonyms=self.config.app_synonyms,
+                )
+            )
+        )
+        reg.register(TextTypeSkill())
+        reg.register(WebSearchSkill(WebBrowserService(docs_sites=self.config.docs_sites)))
+        reg.register(
+            DocsLookupSkill(
+                DocsLookupService(
+                    window_manager=wm,
+                    docs_sites=self.config.docs_sites,
+                    docs_monitor_0based=self.config.monitors.docs,
+                )
+            )
+        )
+        reg.register(
+            TelegramSendSkill(
+                TelegramService(
+                    api_id=self.config.secrets.telegram_api_id,
+                    api_hash=self.config.secrets.telegram_api_hash,
+                )
+            )
+        )
+        reg.register(
+            AgentRunSkill(
+                AgentCliService(
+                    agent_config=self.config.agent,
+                    allowed_folders=self.config.paths.allowed_folders,
+                    window_manager=wm,
                 )
             )
         )
@@ -134,7 +172,18 @@ class FridayApp:
         elif event.type == HotkeyEventType.GESTURE_RELEASE:
             await self._on_gesture_release()
         elif event.type == HotkeyEventType.EXPLAIN_CLIPBOARD:
-            log.info("Хоткей explain_clipboard натиснуто (буде підключено на Етапі 6).")
+            await self._on_explain_clipboard()
+
+    async def _on_explain_clipboard(self) -> None:
+        """Миттєво відкриває документацію по помилці з буфера обміну на моніторі docs (Етап 6)."""
+        intent = CommandIntent(
+            skill="docs.lookup",
+            args={"source": "clipboard"},
+            confidence=1.0,
+            needs_confirm=False,
+        )
+        self._last_intent = intent
+        await self._execute_intent(intent)
 
     async def _on_voice_press(self, event: HotkeyEvent) -> None:
         """Старт запису по утриманню клавіші."""
@@ -204,12 +253,17 @@ class FridayApp:
             await self.feedback.notify("Уточніть команду", question)
             return
 
-        if intent.needs_confirm:
+        if should_require_confirmation(
+            intent.skill,
+            intent.needs_confirm,
+            self.config.safety,
+        ):
             self._pending_intent = intent
             self.transition(AssistantState.CONFIRMING)
+            prompt_msg = build_confirmation_prompt(intent.skill, intent.args)
             await self.feedback.notify(
                 "Підтвердіть дію (Enter / Esc)",
-                f"{intent.skill}: {intent.args}",
+                prompt_msg,
             )
             return
 
@@ -221,12 +275,15 @@ class FridayApp:
             return
         intent = self._pending_intent
         self._pending_intent = None
+        intent.args["_confirmed"] = True
         await self._execute_intent(intent)
 
     async def _execute_intent(self, intent: CommandIntent) -> None:
         """Виконує навичку з реєстру та повертає автомат у стан IDLE."""
         self.transition(AssistantState.EXECUTING)
         try:
+            validate_intent_safety(intent.skill, intent.args)
+
             if intent.skill == "gesture.drag" and self.registry.get("gesture.drag") is None:
                 ctrl = self._ensure_gesture_controller()
                 self.registry.register(GestureDragSkill(ctrl))

@@ -1,5 +1,24 @@
 # CHANGELOG — FRIDAY
 
+## [1.0.0] — Етапи 5–9: Введення тексту, Вебпошук, Помилка → Документація, Telegram, Antigravity CLI та Безпека/Профілювання (2026-10-22)
+
+### Додано
+- **Етап 5 — Введення тексту й вебпошук**:
+  - `friday.skills.typing_text` (`TextTyper`, `TextTypeSkill`, `PyperclipClipboardBackend`): швидка й надійна вставка кириличного та технічного тексту через буфер обміну + `Ctrl+V` із гарантованим збереженням і відновленням попереднього вмісту буфера обміну (`finally`).
+  - `friday.skills.web` (`WebBrowserService`, `WebSearchSkill`, `build_google_search_url`, `resolve_site_domain`): побудова URL пошуку Google з підтримкою `site:<домен>` (`python`, `fastapi`, `pydantic`, `mdn` тощо) та відкриття відомих сайтів документації.
+- **Етап 6 — Помилка → документація**:
+  - `friday.skills.docs_lookup` (`DocsLookupService`, `DocsLookupSkill`, `trim_traceback_text`, `parse_traceback_heuristic`): обрізання буфера обміну до першого рядка помилки + останніх ~40 рядків traceback, миттєва евристика без ШІ для визначення бібліотеки (`fastapi`, `pydantic`, `python`, `mdn`) й винятку (`TypeError`, `ValidationError`, `ModuleNotFoundError`), відкриття нового вікна браузера з очікуванням його HWND, переміщення на монітор `docs` та **повернення фокусу в активне вікно редактора** (без крадіжки фокусу).
+  - Підключено гарячу клавішу `explain_clipboard` (`ctrl+alt+d`) у `friday.app.FridayApp`.
+- **Етап 7 — Telegram**:
+  - `friday.skills.telegram` (`TelegramService`, `TelegramSendSkill`, `resolve_contact_fuzzy`, `format_telegram_confirm_prompt`): лінива інтеграція з `telethon` (локальна сесія `friday_telegram.session` у `.gitignore`), кешування діалогів, нечіткий пошук контакту з морфологічною нормалізацією українських відмінків імен («Олегу» → «Олег Коваленко», «Марині» → «Марина Dev») та обов'язковий Confirm Gate (`Олегу: "…" — відправити? (Enter / Esc)`).
+- **Етап 8 — Інтеграція Antigravity CLI**:
+  - `friday.skills.agent_cli` (`AgentCliService`, `AgentRunSkill`, `build_agent_cli_command`, `resolve_project_workdir`, `resolve_agent_executable`): перевірено реальні прапорці `agy --help` (`-i` / `--prompt-interactive`), автоматичне визначення робочої папки проєкту за заголовком вікна редактора або зі списку `[paths].allowed_folders`, жорстка заборона `--dangerously-skip-permissions` / `--yes` / `auto_approve` та обов'язкове ручне підтвердження перед запуском.
+- **Етап 9 — Безпека, надійність, оптимізація**:
+  - Розширено `friday.safety` (`validate_intent_safety`, `should_require_confirmation`, `build_confirmation_prompt`) для централізованого блокування деструктивних патернів перед виконанням будь-якої навички.
+  - Реалізовано `friday.autostart` (`enable_autostart`, `disable_autostart`, `is_autostart_enabled`, `build_autostart_script`) для фонового автозапуску через `pythonw.exe` без консольного вікна.
+  - Додано зведену таблицю профілювання затримок `TimingTracker.format_summary_table()` у `friday.util.timing` та ізоляцію винятків навичок у головному циклі `FridayApp`.
+  - Додано комплексні тести `tests/test_stages5_to_9.py`.
+
 ## [0.9.0] — Етап 4: Роутер (Fast path rules + Smart path LLM JSON) (2026-10-22)
 
 ### Додано

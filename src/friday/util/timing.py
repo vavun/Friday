@@ -47,6 +47,37 @@ class TimingTracker:
         """Очищає збережені записи."""
         self._records.clear()
 
+    def summary_by_stage(self) -> dict[str, dict[str, float]]:
+        """Групує вимірювання за назвою етапу та обчислює count, avg_ms, max_ms."""
+        grouped: dict[str, list[float]] = {}
+        for rec in self._records:
+            grouped.setdefault(rec.stage, []).append(rec.elapsed_ms)
+
+        out: dict[str, dict[str, float]] = {}
+        for stage, vals in grouped.items():
+            out[stage] = {
+                "count": float(len(vals)),
+                "avg_ms": sum(vals) / len(vals),
+                "min_ms": min(vals),
+                "max_ms": max(vals),
+            }
+        return out
+
+    def format_summary_table(self) -> str:
+        """Формує текстову таблицю затримок по всіх етапах для профілювання (Етап 9)."""
+        stats = self.summary_by_stage()
+        if not stats:
+            return "Немає записаних вимірювань затримок."
+        lines = [
+            f"{'Етап':<28} | {'К-сть':>5} | {'Сер. (мс)':>10} | {'Макс. (мс)':>10}",
+            "-" * 62,
+        ]
+        for stage, item in sorted(stats.items()):
+            lines.append(
+                f"{stage:<28} | {int(item['count']):>5} | {item['avg_ms']:>10.2f} | {item['max_ms']:>10.2f}"
+            )
+        return "\n".join(lines)
+
 
 tracker = TimingTracker()
 measure_time = tracker.measure

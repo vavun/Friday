@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence
 
-from friday.config import AllowedFolderEntry
+from friday.config import AllowedFolderEntry, SafetyConfig
 
 SECRET_NAMES: frozenset[str] = frozenset({".env", "id_rsa", "id_ed25519", "credentials.json"})
 SECRET_SUFFIXES: frozenset[str] = frozenset({".pem", ".key", ".pfx", ".p12", ".session"})
@@ -67,3 +67,39 @@ def check_path_allowed(
         raise PermissionError(f"Папка для '{resolved}' відкрита лише для читання (read_only)")
 
     return resolved
+
+
+def validate_intent_safety(skill: str, args: dict[str, Any]) -> None:
+    """Перевіряє аргументи команди на наявність заборонених деструктивних патернів перед виконанням."""
+    if skill in {"agent.run", "app.launch"}:
+        for key, val in args.items():
+            if isinstance(val, str) and is_dangerous_command(val):
+                raise PermissionError(
+                    f"Дію '{skill}' заблоковано safety.py: у полі '{key}' виявлено небезпечний патерн."
+                )
+
+
+def should_require_confirmation(
+    skill: str,
+    needs_confirm_flag: bool,
+    safety_config: SafetyConfig | None = None,
+) -> bool:
+    """Визначає, чи потрібне підтвердження (Confirm Gate) для навички."""
+    cfg = safety_config or SafetyConfig()
+    if skill == "telegram.send":
+        return True if cfg.confirm_messages else needs_confirm_flag
+    if skill == "agent.run":
+        return True if cfg.confirm_file_changes else needs_confirm_flag
+    return needs_confirm_flag
+
+
+def build_confirmation_prompt(skill: str, args: dict[str, Any]) -> str:
+    """Формує зрозумілий рядок підтвердження (Enter / Esc) для користувача."""
+    if skill == "telegram.send":
+        contact = str(args.get("contact", "")).strip().capitalize()
+        text = str(args.get("text", "")).strip()
+        return f'{contact}: "{text}" — відправити? (Enter / Esc)'
+    if skill == "agent.run":
+        prompt = str(args.get("prompt", "")).strip()[:80]
+        return f'Antigravity CLI: "{prompt}" — запустити сесію? (Enter / Esc)'
+    return f"{skill}: {args} — виконати? (Enter / Esc)"
