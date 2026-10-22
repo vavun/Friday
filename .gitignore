@@ -16,6 +16,11 @@ venv/
 .venv/
 env/
 
+# Моделі MediaPipe / Whisper
+models/*.task
+*.onnx
+*.bin
+
 # Тимчасові файли та логи
 temp/
 logs/

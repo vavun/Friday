@@ -21,6 +21,16 @@ log = logging.getLogger("friday.skills.windows")
 
 DWMWA_EXTENDED_FRAME_BOUNDS = 9
 
+# Класи системних вікон (робочий стіл, панель завдань), які заборонено переміщувати жестами
+PROTECTED_WINDOW_CLASSES: frozenset[str] = frozenset({
+    "Progman",
+    "WorkerW",
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "DV2ControlHost",
+    "Windows.UI.Core.CoreWindow",
+})
+
 MoveMode = Literal["maximize", "left", "right", "center"]
 ResizeMode = Literal["bigger", "smaller", "maximize", "restore"]
 
@@ -52,6 +62,8 @@ class Win32Backend(Protocol):
 
     def is_window(self, hwnd: int) -> bool: ...
     def get_foreground_window(self) -> int: ...
+    def get_window_class(self, hwnd: int) -> str: ...
+    def is_window_elevated(self, hwnd: int) -> bool: ...
     def list_visible_windows(self) -> list[WindowEntry]: ...
     def get_monitors(self) -> list[MonitorInfo]: ...
     def get_window_rect(self, hwnd: int) -> Rect: ...
@@ -73,6 +85,24 @@ class RealWin32Backend:
 
     def get_foreground_window(self) -> int:
         return int(win32gui.GetForegroundWindow())
+
+    def get_window_class(self, hwnd: int) -> str:
+        try:
+            return str(win32gui.GetClassName(hwnd))
+        except Exception:
+            return ""
+
+    def is_window_elevated(self, hwnd: int) -> bool:
+        """Перевіряє, чи запущено процес вікна з правами Адміністратора (якщо доступ блокується — True)."""
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if not pid:
+                return False
+            hproc = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION, False, pid)
+            win32api.CloseHandle(hproc)
+            return False
+        except Exception:
+            return True
 
     def list_visible_windows(self) -> list[WindowEntry]:
         entries: list[WindowEntry] = []
@@ -392,6 +422,20 @@ class WindowManager:
         with measure_time("window.focus"):
             ok = self.backend.set_foreground(hwnd)
             return {"hwnd": hwnd, "focused": ok}
+
+    def validate_draggable_window(self, hwnd: int) -> None:
+        """Перевіряє, що вікно не є робочим столом, панеллю завдань або процесом Адміністратора."""
+        if not hwnd or not self.backend.is_window(hwnd):
+            raise LookupError("Активне вікно не знайдено")
+        cls_name = self.backend.get_window_class(hwnd)
+        if cls_name in PROTECTED_WINDOW_CLASSES:
+            raise PermissionError(
+                f"Вікно системного класу '{cls_name}' (робочий стіл / панель завдань) не можна переміщувати"
+            )
+        if self.backend.is_window_elevated(hwnd):
+            raise PermissionError(
+                "Неможливо перемістити вікно: програма запущена з правами Адміністратора (UIPI)"
+            )
 
 
 class WindowMoveSkill:

@@ -10,6 +10,7 @@ SkillName = Literal[
     "window.move",
     "window.resize",
     "window.focus",
+    "gesture.drag",
     "app.launch",
     "web.search",
     "docs.lookup",

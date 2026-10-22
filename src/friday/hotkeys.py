@@ -22,6 +22,8 @@ class HotkeyEventType(StrEnum):
     VOICE_PRESS = "VOICE_PRESS"
     VOICE_RELEASE = "VOICE_RELEASE"
     EXPLAIN_CLIPBOARD = "EXPLAIN_CLIPBOARD"
+    GESTURE_PRESS = "GESTURE_PRESS"
+    GESTURE_RELEASE = "GESTURE_RELEASE"
     CANCEL = "CANCEL"
     CONFIRM = "CONFIRM"
 
@@ -118,10 +120,12 @@ class HotkeyListener:
         self._voice_token = normalize_key_token(config.voice)
         self._cancel_token = normalize_key_token(config.cancel)
         self._explain_combo = parse_combo(config.explain_clipboard)
+        self._gesture_combo = parse_combo(config.gesture)
 
         self._pressed_tokens: set[str] = set()
         self._voice_held: bool = False
         self._explain_latched: bool = False
+        self._gesture_latched: bool = False
         self._listener: Any | None = None
 
     def _emit(self, event_type: HotkeyEventType) -> None:
@@ -161,6 +165,14 @@ class HotkeyListener:
             self._explain_latched = True
             self._emit(HotkeyEventType.EXPLAIN_CLIPBOARD)
 
+        if (
+            self._gesture_combo
+            and self._gesture_combo.issubset(self._pressed_tokens)
+            and not self._gesture_latched
+        ):
+            self._gesture_latched = True
+            self._emit(HotkeyEventType.GESTURE_PRESS)
+
     def on_release(self, key: Any) -> None:
         """Обробник відпускання клавіші (викликається з потоку pynput)."""
         tokens = key_to_tokens(key)
@@ -172,6 +184,10 @@ class HotkeyListener:
 
         if not self._explain_combo.issubset(self._pressed_tokens):
             self._explain_latched = False
+
+        if self._gesture_latched and not self._gesture_combo.issubset(self._pressed_tokens):
+            self._gesture_latched = False
+            self._emit(HotkeyEventType.GESTURE_RELEASE)
 
     def start(self) -> None:
         """Запускає фоновий потік слухача pynput."""

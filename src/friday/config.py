@@ -23,6 +23,7 @@ class HotkeysConfig(BaseModel):
 
     voice: str = "right_ctrl"
     explain_clipboard: str = "ctrl+alt+d"
+    gesture: str = "ctrl+alt+g"
     cancel: str = "esc"
 
 
@@ -73,6 +74,23 @@ class AgentConfig(BaseModel):
         return False
 
 
+class GestureConfig(BaseModel):
+    """Налаштування керування вікнами жестами руки через камеру (Етап A)."""
+
+    enabled: bool = True
+    mode: Literal["drag", "swipe"] = "drag"
+    camera_index: int = Field(default=0, ge=0)
+    fps: int = Field(default=20, ge=10, le=30)
+    pinch_on: float = Field(default=0.28, gt=0.05, lt=0.9)
+    pinch_off: float = Field(default=0.40, gt=0.08, lt=1.0)
+    hold_ms: int = Field(default=150, ge=50, le=1000)
+    swipe_distance: float = Field(default=0.22, gt=0.05, lt=0.9)
+    mirror: bool = True
+    idle_timeout_s: float = Field(default=10.0, ge=1.0, le=120.0)
+    min_present_frames: int = Field(default=3, ge=1, le=15)
+    min_confidence: float = Field(default=0.60, ge=0.1, le=1.0)
+
+
 class SecretsConfig(BaseModel):
     """Секретні ключі, завантажені з .env (не логуються)."""
 
@@ -95,6 +113,7 @@ class AppConfig(BaseModel):
     apps: dict[str, str] = Field(default_factory=dict)
     docs_sites: dict[str, str] = Field(default_factory=dict)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    gesture: GestureConfig = Field(default_factory=GestureConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 
 

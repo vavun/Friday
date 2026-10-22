@@ -67,6 +67,12 @@ class FakeWin32Backend:
     def get_foreground_window(self) -> int:
         return self.foreground_hwnd
 
+    def get_window_class(self, hwnd: int) -> str:
+        return "Chrome_WidgetWin_1"
+
+    def is_window_elevated(self, hwnd: int) -> bool:
+        return False
+
     def list_visible_windows(self) -> list[WindowEntry]:
         self.enum_count += 1
         return list(self.windows.values())

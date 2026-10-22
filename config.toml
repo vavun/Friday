@@ -1,6 +1,7 @@
 [hotkeys]
 voice = "right_ctrl"          # утримувати для голосової команди
 explain_clipboard = "ctrl+alt+d"   # помилка з буфера -> документація
+gesture = "ctrl+alt+g"        # утримувати (або перемикати) для режиму жестів
 cancel = "esc"
 
 [audio]
@@ -34,3 +35,16 @@ mdn = "developer.mozilla.org"
 [agent]
 command = "antigravity"       # перевірити реальний синтаксис: antigravity --help
 auto_approve = false          # ЗАВЖДИ false при голосовому керуванні
+
+[gesture]
+enabled = true
+mode = "drag"                 # "drag" | "swipe"
+camera_index = 0
+fps = 20
+pinch_on = 0.28               # поріг увімкнення щипка (гістерезис)
+pinch_off = 0.40              # поріг відпускання щипка
+hold_ms = 150                 # мінімальна тривалість щипка для старту перетягування
+swipe_distance = 0.22         # мін. зміщення за X для swipe (< 1 с)
+mirror = true                 # дзеркальне відображення осі X камери
+idle_timeout_s = 10.0         # авто-вимкнення камери при бездіяльності
+

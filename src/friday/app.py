@@ -11,7 +11,9 @@ from typing import Callable
 from friday.audio import AudioRecorder
 from friday.config import AppConfig
 from friday.feedback import FeedbackManager
+from friday.gesture.controller import GestureRuntimeController
 from friday.hotkeys import HotkeyEvent, HotkeyEventType, HotkeyListener
+from friday.skills.windows import WindowManager
 from friday.stt import Transcriber, WhisperLocalTranscriber, create_transcriber
 
 log = logging.getLogger("friday.app")
@@ -37,6 +39,7 @@ class FridayApp:
         recorder: AudioRecorder | None = None,
         feedback: FeedbackManager | None = None,
         transcriber: Transcriber | None = None,
+        gesture_controller: GestureRuntimeController | None = None,
         listener_factory: Callable[..., HotkeyListener] | None = None,
     ) -> None:
         self.config = config
@@ -47,6 +50,7 @@ class FridayApp:
         self.recorder = recorder or AudioRecorder(config=config.audio)
         self.feedback = feedback or FeedbackManager()
         self.transcriber: Transcriber = transcriber or create_transcriber(config)
+        self.gesture_controller = gesture_controller
         self._listener_factory = listener_factory
         self._hotkey_listener: HotkeyListener | None = None
         self._last_audio: bytes | None = None
@@ -85,6 +89,10 @@ class FridayApp:
             await self._on_voice_release(event)
         elif event.type == HotkeyEventType.CANCEL:
             await self._on_cancel()
+        elif event.type == HotkeyEventType.GESTURE_PRESS:
+            await self._on_gesture_press()
+        elif event.type == HotkeyEventType.GESTURE_RELEASE:
+            await self._on_gesture_release()
         elif event.type == HotkeyEventType.EXPLAIN_CLIPBOARD:
             log.info("Хоткей explain_clipboard натиснуто (буде підключено на Етапі 6).")
 
@@ -144,8 +152,33 @@ class FridayApp:
         # На Етапі 4 тут буде перехід у ROUTING -> EXECUTING
         self.transition(AssistantState.IDLE)
 
+    def _ensure_gesture_controller(self) -> GestureRuntimeController:
+        if self.gesture_controller is None:
+            self.gesture_controller = GestureRuntimeController(
+                config=self.config.gesture,
+                window_manager=WindowManager(),
+            )
+        return self.gesture_controller
+
+    async def _on_gesture_press(self) -> None:
+        """Вмикає камеру та відстеження жестів при утриманні гарячої клавіші gesture."""
+        ctrl = self._ensure_gesture_controller()
+        await asyncio.to_thread(ctrl.start)
+
+    async def _on_gesture_release(self) -> None:
+        """Зупиняє камеру після відпускання гарячої клавіші gesture."""
+        if self.gesture_controller is not None and self.gesture_controller.is_running:
+            await asyncio.to_thread(self.gesture_controller.stop, False)
+
     async def _on_cancel(self) -> None:
-        """Скасування запису або дії по Esc."""
+        """Скасування запису, перетягування вікна або поточної дії по Esc."""
+        if self.gesture_controller is not None and self.gesture_controller.is_running:
+            await asyncio.to_thread(self.gesture_controller.stop, True)
+            asyncio.create_task(self.feedback.beep_error())
+        elif self.gesture_controller is not None and self.gesture_controller.mover.active_session is not None:
+            await asyncio.to_thread(self.gesture_controller.mover.cancel_and_restore)
+            asyncio.create_task(self.feedback.beep_error())
+
         if self.recorder.recording:
             await asyncio.to_thread(self.recorder.stop)
         if self._state != AssistantState.IDLE:
@@ -199,6 +232,8 @@ class FridayApp:
         finally:
             if self._hotkey_listener is not None:
                 self._hotkey_listener.stop()
+            if self.gesture_controller is not None and self.gesture_controller.is_running:
+                await asyncio.to_thread(self.gesture_controller.stop, True)
             if self.recorder.recording:
                 await asyncio.to_thread(self.recorder.stop)
             self.transition(AssistantState.IDLE)

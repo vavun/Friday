@@ -1,5 +1,18 @@
 # CHANGELOG — FRIDAY
 
+## [0.5.0] — Етап A: Навичка `gesture.drag` (відстеження руки через камеру) (2026-10-22)
+
+### Додано
+- Створено пакет `friday.gesture` для керування вікнами жестами руки на одній камері:
+  - `camera.py` (`CameraStream`): захоплення `640x480` при `15–20 FPS` через DirectShow (`cv2.CAP_DSHOW`), миттєве звільнення камери (`~277 мс < 1 с`), жодного запису кадрів на диск.
+  - `hand_tracker.py` (`HandTracker`): інтеграція з актуальним для Python 3.12 API `mediapipe.tasks.python.vision.HandLandmarker` (`RunningMode.VIDEO`, `num_hands=1`), оптимізація вхідного тензора (`320x240` stride-downscale) для затримки `< 100 мс`.
+  - `gestures.py` (`PinchDetector`, `GestureStateMachine`, `compute_pinch_ratio`, `map_normalized_to_virtual_desktop`, `find_monitor_at_point`, `find_neighbor_monitor`): жест «щипок» як відношення відстані `(4..8) / (0..9)` з подвійним порогом гістерезису (`pinch_on` / `pinch_off`), утриманням `≥ 150 мс`, автоматом станів `IDLE -> HOVER -> DRAGGING -> DROP` та відображенням координат на віртуальний робочий стіл усіх 3 моніторів.
+  - `smoothing.py` (`OneEuroFilter1D`, `OneEuroFilter2D`): адаптивне згладжування координат руки фільтром One Euro.
+  - `controller.py` (`GestureWindowMover`, `GestureRuntimeController`, `GestureDragSkill`): режими `drag` (обмеження `SetWindowPos` до `~30 Гц` + прилипання до монітора після відпускання) та `swipe` (щипок + різкий рух убік `< 1 с`), авто-вимкнення камери після `idle_timeout_s`, скасування перетягування по `Esc` з поверненням вікна на початкову позицію.
+- Розширено `friday.skills.windows.WindowManager.validate_draggable_window`: блокування системних вікон робочого столу (`Progman`, `WorkerW`), панелі завдань (`Shell_TrayWnd`, `Shell_SecondaryTrayWnd`) та процесів з правами Адміністратора (UIPI).
+- Додано секцію `[gesture]` у `config.toml` та `GestureConfig` у `friday.config`.
+- Додано юніт-тести `tests/test_gesture_stage_a.py` (8 тестів на синтетичних наборах точок руки без камери).
+
 ## [0.4.0] — Етап 3: Менеджер вікон і моніторів (Fast Path) (2026-10-22)
 
 ### Додано

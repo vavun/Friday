@@ -49,6 +49,21 @@ def build_parser() -> argparse.ArgumentParser:
     launch_p = app_sub.add_parser("launch", help="Запустити програму з config.toml")
     launch_p.add_argument("name")
 
+    # gesture ...
+    gest_parser = sub.add_parser("gesture", help="Запустити режим жестів (Етап A)")
+    gest_parser.add_argument(
+        "--seconds",
+        type=float,
+        default=10.0,
+        help="Тривалість сесії жестів у секундах",
+    )
+    gest_parser.add_argument(
+        "--mode",
+        choices=["drag", "swipe"],
+        default=None,
+        help="Перевизначити режим (drag або swipe)",
+    )
+
     return parser
 
 
@@ -89,6 +104,34 @@ def main(argv: list[str] | None = None) -> int:
         launcher = AppLauncher(cfg.apps)
         res = launcher.launch_sync(args.name)
         log.info("Результат: %s", res)
+        return 0
+
+    if args.group == "gesture":
+        import time
+        from friday.gesture.controller import GestureRuntimeController
+
+        if args.mode:
+            cfg.gesture.mode = args.mode
+        wm = WindowManager()
+        ctrl = GestureRuntimeController(config=cfg.gesture, window_manager=wm)
+        if not ctrl.start():
+            log.error("Не вдалося запустити режим жестів.")
+            return 1
+        log.info("Режим жестів (%s) активний на %.1f с...", cfg.gesture.mode, args.seconds)
+        try:
+            t_end = time.perf_counter() + args.seconds
+            while ctrl.is_running and time.perf_counter() < t_end:
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            stop_ms = ctrl.stop()
+            log.info(
+                "Завершено: stop_ms=%.2f мс, camera_release=%.2f мс, hand_to_window=%.2f мс",
+                stop_ms,
+                ctrl.last_camera_release_ms,
+                ctrl.mover.last_hand_to_window_ms,
+            )
         return 0
 
     return 1
