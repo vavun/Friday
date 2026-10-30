@@ -13,6 +13,7 @@ from friday.config import AppConfig
 from friday.feedback import FeedbackManager
 from friday.gesture.controller import GestureDragSkill, GestureRuntimeController
 from friday.hotkeys import HotkeyEvent, HotkeyEventType, HotkeyListener
+from friday.launcher.services.config_store import ConfigStore
 from friday.router import CommandIntent, CommandRouter
 from friday.safety import (
     build_confirmation_prompt,
@@ -23,6 +24,14 @@ from friday.skills.agent_cli import AgentCliService, AgentRunSkill
 from friday.skills.apps import AppLauncher, AppLaunchSkill
 from friday.skills.base import SkillRegistry
 from friday.skills.docs_lookup import DocsLookupService, DocsLookupSkill
+from friday.skills.dynamic import (
+    AppDiscoverSkill,
+    AppDiscoveryService,
+    DynamicSkillManager,
+    PipelineSaveSkill,
+    SkillCreateSkill,
+    SkillRunSkill,
+)
 from friday.skills.files import FileCreateSkill, FileOpenSkill, FileSystemService
 from friday.skills.telegram import TelegramSendSkill, TelegramService
 from friday.skills.typing_text import TextTypeSkill
@@ -93,6 +102,25 @@ class FridayApp:
             custom_synonyms=self.config.app_synonyms,
         )
         reg.register(AppLaunchSkill(app_launcher))
+        config_store = ConfigStore()
+        app_discovery = AppDiscoveryService(
+            config=self.config,
+            app_launcher=app_launcher,
+            config_store=config_store,
+        )
+        reg.register(AppDiscoverSkill(app_discovery, app_launcher))
+        if hasattr(self.router, "llm_parser") and self.router.llm_parser is not None:
+            self.router.llm_parser.app_discovery = app_discovery
+
+        dynamic_mgr = DynamicSkillManager(
+            config=self.config,
+            registry=reg,
+            config_store=config_store,
+            app_discovery=app_discovery,
+        )
+        reg.register(PipelineSaveSkill(dynamic_mgr))
+        reg.register(SkillCreateSkill(dynamic_mgr))
+        reg.register(SkillRunSkill(dynamic_mgr))
         file_service = FileSystemService(
             allowed_folders=self.config.paths.allowed_folders,
             app_launcher=app_launcher,
@@ -296,6 +324,10 @@ class FridayApp:
         self.transition(AssistantState.EXECUTING)
         try:
             steps = intent.steps if intent.steps else [intent]
+            last_app_key: str | None = None
+            last_raw_app_name: str | None = None
+            prev_was_launch = False
+
             for idx, step in enumerate(steps):
                 validate_intent_safety(step.skill, step.args)
 
@@ -303,15 +335,52 @@ class FridayApp:
                     ctrl = self._ensure_gesture_controller()
                     self.registry.register(GestureDragSkill(ctrl))
 
+                # Якщо попередній крок відкрив програму через app.discover/app.launch, оновлюємо target для window.*
+                if step.skill in ("window.move", "window.resize", "window.focus") and last_app_key:
+                    cur_t = str(step.args.get("target", "active")).strip().lower()
+                    if cur_t in ("його", "її", "це", "це вікно", "") or (
+                        last_raw_app_name and cur_t == last_raw_app_name
+                    ):
+                        step.args["target"] = last_app_key
+                    elif cur_t in self.config.app_synonyms:
+                        step.args["target"] = self.config.app_synonyms[cur_t]
+
                 skill = self.registry.get(step.skill)
                 if skill is not None:
                     log.info("Виконання кроку %d/%d: %s (%s)", idx + 1, len(steps), step.skill, step.args)
-                    await skill.execute(step.args)
+                    if step.skill in ("app.launch", "app.discover"):
+                        last_raw_app_name = str(step.args.get("name", "")).strip().lower()
+
+                    # Якщо це крок керування вікном одразу після запуску програми, даємо до 3 коротких спроб знайти нове вікно
+                    if prev_was_launch and step.skill in ("window.move", "window.resize", "window.focus"):
+                        for wait_try in range(3):
+                            try:
+                                res = await skill.execute(step.args)
+                                break
+                            except LookupError:
+                                if wait_try == 2:
+                                    raise
+                                await asyncio.sleep(0.25)
+                    else:
+                        res = await skill.execute(step.args)
+
+                    if isinstance(res, dict) and res.get("app"):
+                        last_app_key = str(res["app"]).strip().lower()
+                    elif step.skill == "web.search":
+                        last_app_key = "browser"
+
+                    prev_was_launch = step.skill in (
+                        "app.launch",
+                        "app.discover",
+                        "file.open",
+                        "file.create",
+                        "web.search",
+                    )
                     # Якщо відкрили програму/файл/сайт, а наступний крок маніпулює вікном —
                     # даємо системі невелику паузу (0.6 с) для появи нового вікна та передачі фокусу
                     if (
                         len(steps) > idx + 1
-                        and step.skill in ("app.launch", "file.open", "file.create", "web.search")
+                        and prev_was_launch
                         and steps[idx + 1].skill in ("window.move", "window.resize", "window.focus")
                     ):
                         await asyncio.sleep(0.6)

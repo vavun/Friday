@@ -6,6 +6,7 @@ import logging
 from typing import Literal
 
 from friday.config import AppConfig
+from friday.router.clef_client import ClefToolPlanner
 from friday.router.llm_parser import LlmCommandParser
 from friday.router.rules import match_fast_rule, normalize_command_text
 from friday.router.schema import CommandIntent, SkillName
@@ -44,6 +45,8 @@ class CommandRouter:
                 text,
                 custom_apps=self.config.apps,
                 custom_synonyms=self.config.app_synonyms,
+                saved_pipelines=self.config.pipelines,
+                saved_skills=self.config.custom_skills,
             )
 
         if fast_intent is not None:
@@ -68,6 +71,7 @@ class CommandRouter:
 
 
 __all__ = [
+    "ClefToolPlanner",
     "CommandIntent",
     "CommandRouter",
     "LlmCommandParser",

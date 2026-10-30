@@ -69,14 +69,32 @@ def check_path_allowed(
     return resolved
 
 
+def _contains_dangerous_value(obj: Any) -> tuple[bool, str]:
+    """Рекурсивно перевіряє рядки, списки та словники аргументів на наявність небезпечних патернів."""
+    if isinstance(obj, str):
+        if is_dangerous_command(obj):
+            return (True, obj)
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            bad, sample = _contains_dangerous_value(v)
+            if bad:
+                return (True, f"{k}={sample}")
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            bad, sample = _contains_dangerous_value(item)
+            if bad:
+                return (True, sample)
+    return (False, "")
+
+
 def validate_intent_safety(skill: str, args: dict[str, Any]) -> None:
     """Перевіряє аргументи команди на наявність заборонених деструктивних патернів перед виконанням."""
-    if skill in {"agent.run", "app.launch"}:
-        for key, val in args.items():
-            if isinstance(val, str) and is_dangerous_command(val):
-                raise PermissionError(
-                    f"Дію '{skill}' заблоковано safety.py: у полі '{key}' виявлено небезпечний патерн."
-                )
+    if skill in {"agent.run", "app.launch", "app.discover", "pipeline.save", "skill.create", "skill.run"}:
+        bad, detail = _contains_dangerous_value(args)
+        if bad:
+            raise PermissionError(
+                f"Дію '{skill}' заблоковано safety.py: виявлено небезпечний патерн ({detail})."
+            )
 
 
 def should_require_confirmation(
@@ -88,7 +106,7 @@ def should_require_confirmation(
     cfg = safety_config or SafetyConfig()
     if skill == "telegram.send":
         return True if cfg.confirm_messages else needs_confirm_flag
-    if skill == "agent.run":
+    if skill in {"agent.run", "skill.create"}:
         return True if cfg.confirm_file_changes else needs_confirm_flag
     return needs_confirm_flag
 
@@ -102,4 +120,13 @@ def build_confirmation_prompt(skill: str, args: dict[str, Any]) -> str:
     if skill == "agent.run":
         prompt = str(args.get("prompt", "")).strip()[:80]
         return f'Antigravity CLI: "{prompt}" — запустити сесію? (Enter / Esc)'
+    if skill == "skill.create":
+        name = str(args.get("name") or args.get("trigger") or "нова навичка").strip()
+        action_type = str(args.get("action_type", "command")).strip()
+        cmd = str(args.get("command") or args.get("description") or "").strip()[:70]
+        return f'Зберегти та виконати нову навичку "{name}" [{action_type}: {cmd}]? (Enter / Esc)'
+    if skill == "pipeline.save":
+        name = str(args.get("name") or args.get("trigger") or "пайплайн").strip()
+        steps_count = len(args.get("steps", [])) if isinstance(args.get("steps"), list) else 0
+        return f'Зберегти пайплайн "{name}" ({steps_count} кроків)? (Enter / Esc)'
     return f"{skill}: {args} — виконати? (Enter / Esc)"

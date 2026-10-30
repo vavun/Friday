@@ -12,6 +12,7 @@ SkillName = Literal[
     "window.focus",
     "gesture.drag",
     "app.launch",
+    "app.discover",
     "file.open",
     "file.create",
     "web.search",
@@ -19,6 +20,9 @@ SkillName = Literal[
     "text.type",
     "telegram.send",
     "agent.run",
+    "pipeline.save",
+    "skill.create",
+    "skill.run",
     "clarify",
 ]
 

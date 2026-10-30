@@ -16,7 +16,11 @@ from PySide6.QtWidgets import (
 
 from friday.launcher.pages import BasePage, make_cyber_card
 from friday.launcher.services.env_store import EnvStore, mask_secret
-from friday.launcher.services.key_check import KeyCheckResult, verify_gemini_api_key
+from friday.launcher.services.key_check import (
+    KeyCheckResult,
+    verify_explabs_api_key,
+    verify_gemini_api_key,
+)
 from friday.launcher.theme import CyberPalette
 
 
@@ -63,6 +67,7 @@ class KeysPage(BasePage):
         self._on_keys_saved = on_keys_saved
         self._checker_fn = checker_fn
         self._worker: KeyCheckWorker | None = None
+        self._explabs_worker: KeyCheckWorker | None = None
 
         # --- Картка 1: Gemini API Key ---
         gemini_card, g_layout = make_cyber_card(
@@ -101,6 +106,42 @@ class KeysPage(BasePage):
 
         self.root_layout.addWidget(gemini_card)
 
+        # --- Картка 1.5: Experiential Labs Clef API Key ---
+        clef_card, c_layout = make_cyber_card(
+            "EXPERIENTIAL LABS API KEY (CLEF — TOOL CALLING & PIPELINES)",
+            "Основна модель для інтелектуального роутингу, пайплайнів та авто-створення навичок (https://api.experientiallabs.ai/v1).",
+        )
+        self.lbl_explabs_saved = QLabel()
+        self.lbl_explabs_saved.setObjectName("MutedText")
+        c_layout.addWidget(self.lbl_explabs_saved)
+
+        clef_row = QHBoxLayout()
+        self.input_explabs = QLineEdit()
+        self.input_explabs.setPlaceholderText("Вставте EXPLABS_API_KEY для моделі Clef")
+        self.input_explabs.setEchoMode(QLineEdit.EchoMode.Password)
+
+        self.btn_reveal_explabs = QPushButton("Показати (3 с)")
+        self.btn_reveal_explabs.clicked.connect(self._reveal_explabs_temporarily)
+
+        self.btn_save_explabs = QPushButton("Зберегти Clef")
+        self.btn_save_explabs.setObjectName("PrimaryButton")
+        self.btn_save_explabs.clicked.connect(self.save_explabs_key)
+
+        self.btn_check_explabs = QPushButton("Перевірити Clef")
+        self.btn_check_explabs.clicked.connect(self.check_explabs_key)
+
+        clef_row.addWidget(self.input_explabs, stretch=1)
+        clef_row.addWidget(self.btn_reveal_explabs)
+        clef_row.addWidget(self.btn_save_explabs)
+        clef_row.addWidget(self.btn_check_explabs)
+        c_layout.addLayout(clef_row)
+
+        self.lbl_explabs_status = QLabel("Статус Clef: очікування")
+        self.lbl_explabs_status.setObjectName("MutedText")
+        c_layout.addWidget(self.lbl_explabs_status)
+
+        self.root_layout.addWidget(clef_card)
+
         # --- Картка 2: Telegram API (Необов'язково) ---
         tg_card, tg_layout = make_cyber_card(
             "TELEGRAM API (НЕОБОВ'ЯЗКОВО — ЕТАП 7)",
@@ -138,6 +179,12 @@ class KeysPage(BasePage):
         else:
             self.lbl_gemini_saved.setText("Ключ GEMINI_API_KEY ще не збережено у .env")
 
+        c_masked = self.env_store.get_masked("EXPLABS_API_KEY")
+        if c_masked:
+            self.lbl_explabs_saved.setText(f"Збережений EXPLABS_API_KEY: {c_masked}")
+        else:
+            self.lbl_explabs_saved.setText("Ключ EXPLABS_API_KEY ще не збережено у .env")
+
         tg_id_masked = self.env_store.get_masked("TELEGRAM_API_ID")
         tg_hash_masked = self.env_store.get_masked("TELEGRAM_API_HASH")
         if tg_id_masked or tg_hash_masked:
@@ -153,6 +200,14 @@ class KeysPage(BasePage):
         QTimer.singleShot(
             3000,
             lambda: self.input_gemini.setEchoMode(QLineEdit.EchoMode.Password),
+        )
+
+    def _reveal_explabs_temporarily(self) -> None:
+        """Тимчасово показує введений EXPLABS_API_KEY на 3 секунди."""
+        self.input_explabs.setEchoMode(QLineEdit.EchoMode.Normal)
+        QTimer.singleShot(
+            3000,
+            lambda: self.input_explabs.setEchoMode(QLineEdit.EchoMode.Password),
         )
 
     def save_gemini_key(self) -> None:
@@ -188,6 +243,41 @@ class KeysPage(BasePage):
         self.refresh_masked_state()
         if self._on_keys_saved is not None:
             self._on_keys_saved()
+
+    def save_explabs_key(self) -> None:
+        """Зберігає EXPLABS_API_KEY у .env та оновлює маску."""
+        raw_key = self.input_explabs.text().strip()
+        if not raw_key:
+            self.lbl_explabs_status.setText("Введіть непорожній EXPLABS_API_KEY перед збереженням.")
+            self.lbl_explabs_status.setStyleSheet(f"color: {CyberPalette.ERR_RED}; font-weight: bold;")
+            return
+
+        self.env_store.update_keys({"EXPLABS_API_KEY": raw_key})
+        self.input_explabs.clear()
+        self.input_explabs.setEchoMode(QLineEdit.EchoMode.Password)
+        self.refresh_masked_state()
+        self.lbl_explabs_status.setText(f"Ключ Clef збережено у .env ({mask_secret(raw_key)}).")
+        self.lbl_explabs_status.setStyleSheet(f"color: {CyberPalette.OK_GREEN}; font-weight: bold;")
+        if self._on_keys_saved is not None:
+            self._on_keys_saved()
+
+    def check_explabs_key(self) -> None:
+        """Перевіряє EXPLABS_API_KEY у фоновому потоці."""
+        candidate = self.input_explabs.text().strip() or self.env_store.get_key("EXPLABS_API_KEY")
+        self.btn_check_explabs.setEnabled(False)
+        self.lbl_explabs_status.setText("Перевірка з'єднання з Experiential Labs Clef API...")
+        self.lbl_explabs_status.setStyleSheet(f"color: {CyberPalette.CYAN};")
+
+        worker = KeyCheckWorker(candidate, checker_fn=verify_explabs_api_key, parent=self)
+        worker.finished_check.connect(self._on_explabs_check_finished)
+        self._explabs_worker = worker
+        worker.start()
+
+    def _on_explabs_check_finished(self, result: KeyCheckResult) -> None:
+        self.btn_check_explabs.setEnabled(True)
+        self.lbl_explabs_status.setText(result.message)
+        color = CyberPalette.OK_GREEN if result.ok else CyberPalette.ERR_RED
+        self.lbl_explabs_status.setStyleSheet(f"color: {color}; font-weight: bold;")
 
     def check_gemini_key(self) -> None:
         """Запускає перевірку введеного або збереженого у .env ключа в окремому потоці."""

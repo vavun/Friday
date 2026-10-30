@@ -282,6 +282,7 @@ class LauncherWindow(QMainWindow):
             logs_pg = LogsPage(
                 secrets_provider=lambda: [
                     self.env_store.get_key("GEMINI_API_KEY"),
+                    self.env_store.get_key("EXPLABS_API_KEY"),
                     self.env_store.get_key("TELEGRAM_API_HASH"),
                 ],
                 parent=self,
@@ -375,6 +376,7 @@ class LauncherWindow(QMainWindow):
         self.dashboard_page.update_preflight(items)
         secrets_list = [
             self.env_store.get_key("GEMINI_API_KEY"),
+            self.env_store.get_key("EXPLABS_API_KEY"),
             self.env_store.get_key("TELEGRAM_API_HASH"),
         ]
         self.process_manager.set_redacted_secrets(secrets_list)

@@ -335,6 +335,7 @@ class FileCreateSkill:
         name = str(args.get("name", "")).strip()
         location = args.get("location")
         file_kind = args.get("file_kind")
+        initial_content = str(args.get("initial_content") or args.get("content") or "")
         open_after = bool(args.get("open_after", False))
         open_with_app = args.get("app")
 
@@ -345,6 +346,7 @@ class FileCreateSkill:
                 item_type=item_type,
                 location_hint=str(location) if location else None,
                 file_kind=str(file_kind) if file_kind else None,
+                initial_content=initial_content,
                 open_after=open_after,
                 open_with_app=str(open_with_app) if open_with_app else None,
             )

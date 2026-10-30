@@ -49,9 +49,12 @@ class SttConfig(BaseModel):
 
 
 class LlmConfig(BaseModel):
-    """Параметри LLM-парсера команд."""
+    """Параметри LLM-парсера команд та планувальника пайплайнів (Clef / Gemini)."""
 
+    backend: Literal["clef", "gemini"] = "clef"
     model: str = "gemini-3.5-flash-lite"
+    clef_model: str = "clef"
+    clef_base_url: str = "https://api.experientiallabs.ai/v1"
     timeout_s: float = Field(default=12.0, gt=0.5, le=30.0)
 
 
@@ -129,11 +132,15 @@ class SecretsConfig(BaseModel):
     """Секретні ключі, завантажені з .env (не логуються)."""
 
     gemini_api_key: str = ""
+    explabs_api_key: str = ""
     telegram_api_id: str = ""
     telegram_api_hash: str = ""
 
     def __repr__(self) -> str:
-        return "SecretsConfig(gemini_api_key='***', telegram_api_id='***', telegram_api_hash='***')"
+        return (
+            "SecretsConfig(gemini_api_key='***', explabs_api_key='***', "
+            "telegram_api_id='***', telegram_api_hash='***')"
+        )
 
 
 class AppConfig(BaseModel):
@@ -146,6 +153,8 @@ class AppConfig(BaseModel):
     monitors: MonitorsConfig = Field(default_factory=MonitorsConfig)
     apps: dict[str, str] = Field(default_factory=dict)
     app_synonyms: dict[str, str] = Field(default_factory=dict)
+    pipelines: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    custom_skills: dict[str, dict[str, Any]] = Field(default_factory=dict)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     ui: UiSettingsConfig = Field(default_factory=UiSettingsConfig)
@@ -199,6 +208,7 @@ def load_config(
 
     secrets = SecretsConfig(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        explabs_api_key=os.getenv("EXPLABS_API_KEY", ""),
         telegram_api_id=os.getenv("TELEGRAM_API_ID", ""),
         telegram_api_hash=os.getenv("TELEGRAM_API_HASH", ""),
     )

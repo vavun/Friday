@@ -14,6 +14,7 @@ dependencies = [
     "sounddevice>=0.4",
     "numpy>=1.26",
     "google-genai>=1.0",
+    "openai>=1.0",
     "pywin32>=306",
     "pyperclip>=1.8",
     "winotify>=1.1",

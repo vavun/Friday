@@ -15,7 +15,10 @@ language = "uk"
 model = "gemini-3.5-transcribe"
 
 [llm]
+backend = "clef"              # "clef" (Experiential Labs) | "gemini"
 model = "gemini-3.5-flash-lite"
+clef_model = "clef"
+clef_base_url = "https://api.experientiallabs.ai/v1"
 
 [monitors]
 primary = 0

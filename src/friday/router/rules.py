@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from friday.router.clef_client import normalize_step_dict, step_requires_confirm
 from friday.router.schema import CommandIntent
 from friday.skills.apps import APP_NAME_SYNONYMS
 
@@ -230,6 +231,38 @@ _RE_FOCUS = re.compile(
 )
 
 _RE_LAUNCH = re.compile(r"^(?:відкри\w*|запуст\w*|старту\w*|увімкн\w*|ввімкн\w*|включ\w*)\s+(.+)$")
+
+_RE_PIPELINE_SAVE_FAST = re.compile(
+    r"^(?:збережи|запам'ятай|створи|запиши)\s+(?:новий\s+)?(?:пайплайн|сценарій|макрос)\s+"
+    r"(?:під\s+назвою\s+|з\s+назвою\s+)?(.+?)"
+    r"(?:\s*[:\-—]\s*|\s+(?:де\s+|який\s+|щоб\s+)?(?="
+    + ACTION_VERBS_PATTERN
+    + r"\b))(.+)$",
+    re.IGNORECASE,
+)
+
+_PRONOUN_RAW_TARGETS: frozenset[str] = frozenset({
+    "",
+    "його",
+    "її",
+    "це",
+    "це вікно",
+    "поточне вікно",
+    "активне вікно",
+    "вікно",
+})
+
+
+def _resolve_step_target(
+    raw_target: str,
+    custom_synonyms: dict[str, str] | None = None,
+    previous_target: str = "active",
+) -> str:
+    """Визначає цільове вікно кроку з урахуванням займенників ('його', 'її') та попереднього кроку пайплайну."""
+    cleaned = normalize_command_text(raw_target)
+    if cleaned in _PRONOUN_RAW_TARGETS and previous_target and previous_target != "active":
+        return previous_target
+    return resolve_target_name(raw_target, custom_synonyms) if cleaned else previous_target
 
 
 def normalize_command_text(raw: str) -> str:
@@ -521,7 +554,7 @@ def _match_single_action(
         raw_t = (m_move.group(1) or "").strip()
         mon_phrase = m_move.group(2)
         rest = m_move.group(3) or ""
-        target = resolve_target_name(raw_t, custom_synonyms) if raw_t else previous_target
+        target = _resolve_step_target(raw_t, custom_synonyms, previous_target)
         monitor_idx, _ = _extract_monitor_index(mon_phrase, default=2)
         snap_mode, _ = _extract_snap_mode(rest, default="maximize")
         return CommandIntent(
@@ -536,7 +569,7 @@ def _match_single_action(
         raw = (m_move_bare.group(1) or "").strip()
         snap_mode, has_snap = _extract_snap_mode(raw, default="maximize")
         cleaned_target = _RE_MOVE_CLEAN_WORDS.sub("", raw).strip()
-        target = resolve_target_name(cleaned_target, custom_synonyms) if cleaned_target else previous_target
+        target = _resolve_step_target(cleaned_target, custom_synonyms, previous_target)
         return CommandIntent(
             skill="window.move",
             args={"target": target, "monitor": None, "mode": snap_mode},
@@ -546,7 +579,7 @@ def _match_single_action(
     m_snap = _RE_SNAP.match(norm)
     if m_snap:
         raw_t = m_snap.group(1).strip()
-        target = resolve_target_name(raw_t, custom_synonyms) if raw_t else previous_target
+        target = _resolve_step_target(raw_t, custom_synonyms, previous_target)
         snap_mode, _ = _extract_snap_mode(m_snap.group(2), default="center")
         monitor_idx, _ = _extract_monitor_index(m_snap.group(3), default=1)
         return CommandIntent(
@@ -569,7 +602,7 @@ def _match_single_action(
         else:
             mode = "restore"
 
-        target = resolve_target_name(rest_target, custom_synonyms) if rest_target else previous_target
+        target = _resolve_step_target(rest_target, custom_synonyms, previous_target)
         return CommandIntent(
             skill="window.resize",
             args={"target": target, "mode": mode},
@@ -579,7 +612,7 @@ def _match_single_action(
     # 12. Фокус на вікні (window.focus)
     m_focus = _RE_FOCUS.match(norm)
     if m_focus:
-        target = resolve_target_name(m_focus.group(1), custom_synonyms)
+        target = _resolve_step_target(m_focus.group(1), custom_synonyms, previous_target)
         return CommandIntent(
             skill="window.focus",
             args={"target": target},
@@ -604,16 +637,123 @@ def _match_single_action(
     return None
 
 
+def _match_saved_pipeline_or_skill(
+    norm: str,
+    saved_pipelines: dict[str, list[dict[str, Any]]] | None = None,
+    saved_skills: dict[str, dict[str, Any]] | None = None,
+) -> CommandIntent | None:
+    """Миттєво розпізнає збережені користувацькі пайплайни та навички за голосовим тригером."""
+    stripped_verb = re.sub(
+        r"^(?:запуст\w*|відкри\w*|увімкн\w*|ввімкн\w*|включ\w*|активу\w*|викона\w*)\s+(?:режим\s+|сценарій\s+|пайплайн\s+|навичку\s+)?",
+        "",
+        norm,
+    ).strip()
+    candidates = {norm, stripped_verb}
+
+    if saved_pipelines:
+        for trigger, step_dicts in saved_pipelines.items():
+            trig_norm = normalize_command_text(trigger)
+            if trig_norm in candidates and step_dicts:
+                steps: list[CommandIntent] = []
+                for sd in step_dicts:
+                    if not isinstance(sd, dict):
+                        continue
+                    norm_sd = normalize_step_dict(sd)
+                    sk = norm_sd["skill"]
+                    st_args = norm_sd["args"]
+                    steps.append(
+                        CommandIntent(
+                            skill=sk,  # type: ignore[arg-type]
+                            args=st_args,
+                            confidence=0.98,
+                            needs_confirm=step_requires_confirm(sk, st_args),
+                        )
+                    )
+                if steps:
+                    first = steps[0]
+                    return CommandIntent(
+                        skill=first.skill,
+                        args=first.args,
+                        confidence=0.98,
+                        needs_confirm=any(s.needs_confirm for s in steps),
+                        steps=steps,
+                    )
+
+    if saved_skills:
+        for skill_key, spec in saved_skills.items():
+            key_norm = normalize_command_text(skill_key)
+            trig_norm = normalize_command_text(str(spec.get("trigger") or skill_key))
+            if key_norm in candidates or trig_norm in candidates:
+                needs_conf = step_requires_confirm("skill.create", spec) if isinstance(spec.get("steps"), list) else False
+                return CommandIntent(
+                    skill="skill.run",
+                    args={"name": skill_key},
+                    confidence=0.98,
+                    needs_confirm=needs_conf,
+                )
+
+    return None
+
+
+def _match_pipeline_save_fast(
+    orig: str,
+    custom_apps: dict[str, str] | None = None,
+    custom_synonyms: dict[str, str] | None = None,
+) -> CommandIntent | None:
+    """Детерміновано розпізнає створення пайплайну ('збережи пайплайн X: відкрий Y і перенеси на Z')."""
+    m = _RE_PIPELINE_SAVE_FAST.match(orig)
+    if not m:
+        return None
+    raw_trigger = normalize_command_text(m.group(1))
+    body_text = m.group(2).strip()
+    if not raw_trigger or not body_text:
+        return None
+
+    body_intent = match_fast_rule(
+        body_text,
+        custom_apps=custom_apps,
+        custom_synonyms=custom_synonyms,
+    )
+    if body_intent is None or body_intent.skill in ("clarify", "pipeline.save", "skill.create"):
+        return None
+
+    step_intents = body_intent.steps if body_intent.steps else [body_intent]
+    step_dicts = [{"skill": s.skill, "args": dict(s.args)} for s in step_intents]
+    needs_conf = any(step_requires_confirm(s.skill, s.args) for s in step_intents)
+    return CommandIntent(
+        skill="pipeline.save",
+        args={
+            "trigger": raw_trigger,
+            "steps": step_dicts,
+            "run_now": True,
+        },
+        confidence=0.97,
+        needs_confirm=needs_conf,
+    )
+
+
 def match_fast_rule(
     raw_text: str,
     custom_apps: dict[str, str] | None = None,
     custom_synonyms: dict[str, str] | None = None,
+    saved_pipelines: dict[str, list[dict[str, Any]]] | None = None,
+    saved_skills: dict[str, dict[str, Any]] | None = None,
 ) -> CommandIntent | None:
     """Розпізнає одиночну або складену (ланцюжок дій) команду детерміновано без виклику LLM."""
     orig = (raw_text or "").strip()
     norm = normalize_command_text(orig)
     if not norm:
         return None
+
+    # 0. Перевіряємо збережені пайплайни та користувацькі навички
+    saved_hit = _match_saved_pipeline_or_skill(norm, saved_pipelines, saved_skills)
+    if saved_hit is not None:
+        return saved_hit
+
+    # 0.5. Перевіряємо детерміноване збереження нового пайплайну ("збережи пайплайн X: ...")
+    pipe_save_hit = _match_pipeline_save_fast(orig, custom_apps=custom_apps, custom_synonyms=custom_synonyms)
+    if pipe_save_hit is not None:
+        return pipe_save_hit
 
     # 1. Перевіряємо, чи фраза містить кілька складених дій
     segments = split_compound_commands(orig)
