@@ -18,6 +18,8 @@ dependencies = [
     "pywin32>=306",
     "pyperclip>=1.8",
     "winotify>=1.1",
+    "edge-tts>=7.0",
+    "soundfile>=0.12",
 ]
 
 [project.optional-dependencies]

@@ -58,6 +58,19 @@ class LlmConfig(BaseModel):
     timeout_s: float = Field(default=12.0, gt=0.5, le=30.0)
 
 
+class TtsConfig(BaseModel):
+    """English-only female TTS parameters (Edge-TTS primary, Kokoro fallback)."""
+
+    enabled: bool = True
+    engine: Literal["edge", "kokoro", "off"] = "edge"
+    voice: str = "en-US-AriaNeural"
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    sample_rate: int = Field(default=24000, ge=8000, le=48000)
+    kokoro_model_path: str = "C:/Users/Acer/Jarvis/kokoro-v1.0.onnx"
+    kokoro_voices_path: str = "C:/Users/Acer/Jarvis/voices-v1.0.bin"
+    kokoro_voice: str = "af_heart"
+
+
 class MonitorsConfig(BaseModel):
     """Індекси моніторів за призначенням."""
 
@@ -150,6 +163,7 @@ class AppConfig(BaseModel):
     audio: AudioConfig = Field(default_factory=AudioConfig)
     stt: SttConfig = Field(default_factory=SttConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
+    tts: TtsConfig = Field(default_factory=TtsConfig)
     monitors: MonitorsConfig = Field(default_factory=MonitorsConfig)
     apps: dict[str, str] = Field(default_factory=dict)
     app_synonyms: dict[str, str] = Field(default_factory=dict)

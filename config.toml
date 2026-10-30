@@ -20,6 +20,16 @@ model = "gemini-3.5-flash-lite"
 clef_model = "clef"
 clef_base_url = "https://api.experientiallabs.ai/v1"
 
+[tts]
+enabled = true
+engine = "edge"               # "edge" | "kokoro" | "off"
+voice = "en-US-AriaNeural"    # English female voice
+speed = 1.0
+sample_rate = 24000
+kokoro_model_path = "C:/Users/Acer/Jarvis/kokoro-v1.0.onnx"
+kokoro_voices_path = "C:/Users/Acer/Jarvis/voices-v1.0.bin"
+kokoro_voice = "af_heart"     # English female voice (Kokoro fallback)
+
 [monitors]
 primary = 0
 docs = 1                      # на який монітор відкривати документацію
