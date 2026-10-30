@@ -385,6 +385,9 @@ class FridayApp:
 
     async def _on_voice_press(self, event: HotkeyEvent) -> None:
         """Start recording on voice hotkey."""
+        if hasattr(self, "bridge") and self.bridge is not None:
+            self.bridge.cancel_dialogue()
+            asyncio.create_task(self.bridge.notify_jarvis_cancel())
         # Barge-in: cancel speaking tasks and drain audio
         for t in list(self._speak_tasks):
             if not t.done():
@@ -601,6 +604,9 @@ class FridayApp:
 
     async def _on_cancel(self) -> None:
         """Cancel current operation on Esc."""
+        if hasattr(self, "bridge") and self.bridge is not None:
+            self.bridge.cancel_dialogue()
+            asyncio.create_task(self.bridge.notify_jarvis_cancel())
         for t in list(self._speak_tasks):
             if not t.done():
                 t.cancel()

@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING, Any
 
+from friday.tts import clear_queue
 from friday.tts.engine import EdgeTtsEngine
 from friday.tts.sanitizer import sanitize_for_tts, split_sentences
 
@@ -32,6 +34,44 @@ JARVIS_FALLBACK_SYSTEM_PROMPT = (
     "Reply directly to FRIDAY (and the user) in natural spoken English in 1-3 concise sentences, "
     "without markdown or code blocks."
 )
+
+CONCLUSION_PATTERNS = [
+    r"\b(we're|we are) all set\b",
+    r"\ball set\b",
+    r"\bthat covers (it|everything|all)\b",
+    r"\bthat's all (for now|from me)\b",
+    r"\bnothing (more|else) to add\b",
+    r"\bwe('re| are) good to go\b",
+    r"\bgood to go\b",
+    r"\b(sounds|sound) like a plan\b",
+    r"\bthat wraps (it|everything) up\b",
+    r"\btalk (to you )?soon\b",
+    r"\bhave a great (day|rest of your day)\b",
+    r"\bover and out\b",
+    r"\bglad (we|I) could help\b",
+    r"\[DONE\]",
+]
+
+
+def is_dialogue_concluded(text: str) -> bool:
+    """Return True if the text signals natural dialogue conclusion without open questions."""
+    if not text:
+        return True
+    cleaned = text.strip()
+    if cleaned.endswith("?"):
+        return False
+    lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
+    if lines and lines[-1].endswith("?"):
+        return False
+    last_sent = re.split(r"[.!?]\s+", cleaned)[-1].strip()
+    if last_sent.endswith("?"):
+        return False
+
+    lower = cleaned.lower()
+    for pat in CONCLUSION_PATTERNS:
+        if re.search(pat, lower, re.IGNORECASE):
+            return True
+    return False
 
 
 def _http_post_json(url: str, payload: dict[str, Any], timeout_s: float = 45.0) -> dict[str, Any]:
@@ -57,6 +97,27 @@ class PeerBridgeService:
         self._server: asyncio.AbstractServer | None = None
         self._http_post = http_post_fn or _http_post_json
         self._jarvis_tts: EdgeTtsEngine | None = None
+        self._dialogue_active: bool = False
+        self._dialogue_cancelled: bool = False
+
+    def cancel_dialogue(self) -> None:
+        """Mark active peer dialogue as cancelled and halt further turns."""
+        self._dialogue_cancelled = True
+        self._dialogue_active = False
+        log.info("🛑 Friday peer dialogue cancelled.")
+
+    def reset_dialogue(self) -> None:
+        """Reset dialogue cancellation state for a new session."""
+        self._dialogue_cancelled = False
+        self._dialogue_active = True
+
+    async def notify_jarvis_cancel(self) -> None:
+        """Send cancel signal to Jarvis bridge over HTTP."""
+        url = f"{self.config.bridge.jarvis_url.rstrip('/')}/api/cancel"
+        try:
+            await asyncio.to_thread(self._http_post, url, {"source": "friday"}, 2.0)
+        except Exception:
+            pass
 
     async def start(self) -> None:
         """Start local HTTP server for incoming Jarvis calls."""
@@ -117,6 +178,19 @@ class PeerBridgeService:
                 await self._send_json(writer, 200, {"status": "ok", "assistant": "friday"})
                 return
 
+            if method == "POST" and path == "/api/cancel":
+                log.info("Received cancel request from peer Jarvis")
+                self.cancel_dialogue()
+                for t in list(self.app._speak_tasks):
+                    if not t.done():
+                        t.cancel()
+                self.app._speak_tasks.clear()
+                clear_queue(self.app.audio_queue)
+                if self.app.audio_player is not None:
+                    self.app.audio_player.abort()
+                await self._send_json(writer, 200, {"status": "cancelled", "assistant": "friday"})
+                return
+
             if method == "POST" and path == "/api/assist":
                 payload = json.loads(body_bytes.decode("utf-8", errors="replace")) if body_bytes else {}
                 result = await self.handle_incoming_from_jarvis(payload)
@@ -172,81 +246,146 @@ class PeerBridgeService:
         return {"ok": True, "reply": reply, "spoken": speak, "skill": "conversation"}
 
     async def call_jarvis(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Speak to Jarvis, invoke Jarvis over HTTP (or fallback), and optionally continue dialogue."""
+        """Speak to Jarvis, invoke Jarvis over HTTP (or fallback), and converse continuously until concluded or cancelled."""
         raw_message = str(args.get("message", "")).strip()
         spoken_intro = str(args.get("spoken_intro", "")).strip()
         discuss = bool(args.get("discuss", False))
 
+        self.reset_dialogue()
         friday_callout = spoken_intro or await self._build_friday_callout(raw_message)
         log.info("🗣 Friday calling Jarvis: %s", friday_callout)
         await self.app.feedback.notify("FRIDAY -> Jarvis", friday_callout)
         await self.app.speak_and_wait(friday_callout)
 
+        if self._dialogue_cancelled:
+            self._dialogue_active = False
+            return {
+                "status": "cancelled",
+                "friday_said": friday_callout,
+                "jarvis_reply": "",
+                "friday_followup": "",
+                "jarvis_followup_reply": "",
+            }
+
         url = f"{self.config.bridge.jarvis_url.rstrip('/')}/api/assist"
-        payload = {
-            "sender": "friday",
-            "message": friday_callout,
-            "raw_user_request": raw_message,
-            "speak": True,
-            "turn": 1,
-        }
-
+        max_turns = self.config.bridge.max_discussion_turns if discuss else 1
+        turn = 1
+        current_friday_message = friday_callout
         jarvis_reply = ""
-        try:
-            resp = await asyncio.to_thread(
-                self._http_post,
-                url,
-                payload,
-                self.config.bridge.timeout_s,
-            )
-            jarvis_reply = str(resp.get("reply", "")).strip()
-            log.info("🤖 Jarvis replied via bridge: %s", jarvis_reply)
-        except Exception as exc:
-            log.info("Jarvis bridge offline (%s); using direct male-voice fallback", exc)
-            jarvis_reply = await self._generate_jarvis_fallback_reply(friday_callout)
-            await self.app.feedback.notify("Jarvis -> FRIDAY", jarvis_reply)
-            await self._speak_as_jarvis(jarvis_reply)
-
         followup = ""
         jarvis_followup_reply = ""
-        if discuss and jarvis_reply:
-            followup = await self._generate_friday_followup(friday_callout, jarvis_reply)
-            if followup:
-                await self.app.feedback.notify("FRIDAY -> Jarvis", followup)
-                await self.app.speak_and_wait(followup)
+        dialogue_history: list[dict[str, str]] = [
+            {"role": "friday", "content": friday_callout}
+        ]
 
-                # Transmit Friday's follow-up to Jarvis so Jarvis can execute any actions and reply
+        while self._dialogue_active and not self._dialogue_cancelled and turn <= max_turns:
+            log.info("--- Bridge dialogue turn %d/%d (discuss=%s) ---", turn, max_turns, discuss)
+            payload = {
+                "sender": "friday",
+                "message": current_friday_message,
+                "raw_user_request": raw_message,
+                "speak": True,
+                "turn": turn,
+                "discuss": discuss,
+            }
+
+            reply_text = ""
+            try:
+                resp = await asyncio.to_thread(
+                    self._http_post,
+                    url,
+                    payload,
+                    self.config.bridge.timeout_s,
+                )
+                reply_text = str(resp.get("reply", "")).strip()
+                log.info("🤖 Jarvis replied via bridge (turn %d): %s", turn, reply_text)
+            except Exception as exc:
+                log.info("Jarvis bridge offline (%s); using direct male-voice fallback", exc)
                 try:
-                    payload2 = {
+                    reply_text = await self._generate_jarvis_fallback_reply(
+                        current_friday_message,
+                        dialogue_history=dialogue_history,
+                        raw_topic=raw_message,
+                    )
+                except TypeError:
+                    reply_text = await self._generate_jarvis_fallback_reply(current_friday_message)
+                if self._dialogue_cancelled:
+                    break
+                await self.app.feedback.notify("Jarvis -> FRIDAY", reply_text)
+                await self._speak_as_jarvis(reply_text)
+
+            if turn == 1:
+                jarvis_reply = reply_text
+            else:
+                jarvis_followup_reply = reply_text
+
+            if self._dialogue_cancelled or not reply_text:
+                break
+
+            dialogue_history.append({"role": "jarvis", "content": reply_text})
+
+            # Check if Jarvis signaled natural conclusion
+            if is_dialogue_concluded(reply_text):
+                log.info("🛑 Dialogue concluded by Jarvis: %s", reply_text)
+                break
+
+            # If not in continuous discussion mode or reached max turns, stop
+            if not discuss or turn >= max_turns:
+                break
+
+            # Natural pause between speakers so speech feels natural and unhurried
+            await asyncio.sleep(0.5)
+            if self._dialogue_cancelled:
+                break
+
+            # Friday generates next conversational response
+            followup = await self._generate_friday_dialogue_turn(
+                dialogue_history=dialogue_history,
+                raw_topic=raw_message,
+                turn=turn,
+                max_turns=max_turns,
+            )
+
+            if self._dialogue_cancelled or not followup:
+                break
+
+            dialogue_history.append({"role": "friday", "content": followup})
+            log.info("🗣 Friday follow-up (turn %d): %s", turn + 1, followup)
+            await self.app.feedback.notify("FRIDAY -> Jarvis", followup)
+            await self.app.speak_and_wait(followup)
+
+            if self._dialogue_cancelled:
+                break
+
+            # Check if Friday decided to conclude
+            if is_dialogue_concluded(followup):
+                log.info("🛑 Dialogue concluded by Friday: %s", followup)
+                try:
+                    final_payload = {
                         "sender": "friday",
                         "message": followup,
-                        "raw_user_request": raw_message,
-                        "speak": True,
-                        "turn": 2,
+                        "speak": False,
+                        "turn": turn + 1,
+                        "concluded": True,
                     }
-                    resp2 = await asyncio.to_thread(
-                        self._http_post,
-                        url,
-                        payload2,
-                        self.config.bridge.timeout_s,
-                    )
-                    jarvis_followup_reply = str(resp2.get("reply", "")).strip()
-                    log.info("🤖 Jarvis replied to Friday follow-up: %s", jarvis_followup_reply)
-                except Exception as exc:
-                    log.info(
-                        "Jarvis bridge offline for follow-up (%s); using direct male-voice fallback",
-                        exc,
-                    )
-                    jarvis_followup_reply = await self._generate_jarvis_fallback_reply(followup)
-                    await self.app.feedback.notify("Jarvis -> FRIDAY", jarvis_followup_reply)
-                    await self._speak_as_jarvis(jarvis_followup_reply)
+                    await asyncio.to_thread(self._http_post, url, final_payload, 5.0)
+                except Exception:
+                    pass
+                break
 
+            current_friday_message = followup
+            turn += 1
+            await asyncio.sleep(0.5)
+
+        self._dialogue_active = False
         return {
-            "status": "ok",
+            "status": "cancelled" if self._dialogue_cancelled else "ok",
             "friday_said": friday_callout,
             "jarvis_reply": jarvis_reply,
             "friday_followup": followup,
             "jarvis_followup_reply": jarvis_followup_reply,
+            "turns_completed": turn,
+            "history": dialogue_history,
         }
 
     async def _speak_as_jarvis(self, text: str) -> None:
@@ -261,9 +400,11 @@ class PeerBridgeService:
                 self.config.tts.model_copy(update={"voice": self.config.bridge.jarvis_voice})
             )
         for sent in split_sentences(clean):
+            if self._dialogue_cancelled:
+                break
             try:
                 pcm = await self._jarvis_tts.synthesize_pcm(sent)
-                if pcm:
+                if pcm and not self._dialogue_cancelled:
                     await self.app.audio_queue.put(pcm)
             except Exception as exc:
                 log.warning("Jarvis fallback TTS failed: %s", exc)
@@ -314,23 +455,73 @@ class PeerBridgeService:
         res = await self._call_gemini(FRIDAY_CHAT_SYSTEM_PROMPT, prompt)
         return res or "I'm right here, Jarvis, and ready to help."
 
-    async def _generate_friday_followup(self, friday_callout: str, jarvis_reply: str) -> str:
-        """Generate a brief collaborative follow-up from Friday after Jarvis speaks."""
-        prompt = (
-            f"You (FRIDAY) asked your partner Jarvis: {friday_callout!r}\n"
-            f"Jarvis replied: {jarvis_reply!r}\n"
-            "Give a 1-sentence natural follow-up or agreement addressed to Jarvis and the user."
-        )
-        return await self._call_gemini(FRIDAY_CHAT_SYSTEM_PROMPT, prompt)
+    async def _generate_friday_dialogue_turn(
+        self,
+        dialogue_history: list[dict[str, str]],
+        raw_topic: str,
+        turn: int,
+        max_turns: int,
+    ) -> str:
+        """Generate Friday's next conversational turn addressed to Jarvis."""
+        history_lines = []
+        for entry in dialogue_history[-6:]:
+            speaker = "FRIDAY" if entry["role"] == "friday" else "Jarvis"
+            history_lines.append(f"{speaker}: {entry['content']}")
+        history_str = "\n".join(history_lines)
 
-    async def _generate_jarvis_fallback_reply(self, friday_callout: str) -> str:
-        """Generate Jarvis's reply when Jarvis's standalone process is not running."""
+        wrap_up = ""
+        if turn >= max_turns - 1:
+            wrap_up = (
+                "This is the final turn. Give a natural sign-off acknowledging Jarvis "
+                "(e.g., 'Sounds like a plan, Jarvis. We are all set.' or 'That covers everything, thank you.')."
+            )
+        else:
+            wrap_up = (
+                "Continue the conversation naturally in 1-2 spoken sentences. Share your perspective or ask a follow-up. "
+                "If the topic is resolved and everything is clear, wrap up with 'That covers everything' or 'We are all set'."
+            )
+
         prompt = (
-            f"Your partner assistant FRIDAY just said to you: {friday_callout!r}. "
-            "Respond directly to FRIDAY and the user in 1-3 concise spoken sentences."
+            f"You are FRIDAY in an ongoing verbal discussion with your partner AI assistant Jarvis.\n"
+            f"User topic: {raw_topic!r}\n\n"
+            f"Recent dialogue:\n{history_str}\n\n"
+            f"{wrap_up}\n"
+            "Speak directly to Jarvis in 1-2 natural sentences without markdown or code."
+        )
+        res = await self._call_gemini(FRIDAY_CHAT_SYSTEM_PROMPT, prompt)
+        return res or "Sounds like a plan, Jarvis. We're all set."
+
+    async def _generate_friday_followup(self, friday_callout: str, jarvis_reply: str) -> str:
+        """Backwards compatibility wrapper for generating a follow-up."""
+        history = [
+            {"role": "friday", "content": friday_callout},
+            {"role": "jarvis", "content": jarvis_reply},
+        ]
+        return await self._generate_friday_dialogue_turn(history, friday_callout, turn=1, max_turns=10)
+
+    async def _generate_jarvis_fallback_reply(
+        self,
+        friday_callout: str,
+        dialogue_history: list[dict[str, str]] | None = None,
+        raw_topic: str = "",
+    ) -> str:
+        """Generate Jarvis's reply when Jarvis's standalone process is not running."""
+        history_lines = []
+        if dialogue_history:
+            for entry in dialogue_history[-6:]:
+                speaker = "FRIDAY" if entry["role"] == "friday" else "Jarvis"
+                history_lines.append(f"{speaker}: {entry['content']}")
+        history_str = "\n".join(history_lines) if history_lines else f"FRIDAY: {friday_callout}"
+
+        prompt = (
+            f"You are Jarvis in an ongoing spoken dialogue with your partner assistant FRIDAY.\n"
+            f"User topic: {raw_topic or friday_callout!r}\n\n"
+            f"Recent dialogue:\n{history_str}\n\n"
+            "FRIDAY just spoke the last line. Respond directly to FRIDAY and the user in 1-2 concise spoken sentences. "
+            "If the topic is resolved, sign off with 'That covers everything' or 'We are all set'."
         )
         res = await self._call_gemini(JARVIS_FALLBACK_SYSTEM_PROMPT, prompt)
-        return res or "I hear you, Friday. I'm ready to assist."
+        return res or "I hear you, Friday. We're all set."
 
     async def _call_gemini(self, system_instruction: str, user_prompt: str) -> str:
         """Call Gemini Flash-Lite for quick conversational generation."""

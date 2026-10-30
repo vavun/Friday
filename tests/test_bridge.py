@@ -179,3 +179,87 @@ async def test_friday_bridge_http_server_roundtrip() -> None:
         assert "Hello Jarvis" in resp["reply"]
     finally:
         await app.bridge.stop()
+
+
+def test_is_dialogue_concluded_heuristics() -> None:
+    from friday.bridge import is_dialogue_concluded
+
+    assert is_dialogue_concluded("That covers everything, thank you!") is True
+    assert is_dialogue_concluded("Sounds like a plan. Let's proceed.") is True
+    assert is_dialogue_concluded("We are all set then.") is True
+    assert is_dialogue_concluded("Nothing more to add on my end.") is True
+    assert is_dialogue_concluded("We're good to go.") is True
+    assert is_dialogue_concluded("That wraps it up.") is True
+    assert is_dialogue_concluded("Talk to you soon.") is True
+    assert is_dialogue_concluded("Have a great rest of your day!") is True
+    assert is_dialogue_concluded("[DONE]") is True
+
+    # Questions must NOT be treated as concluded even with trigger words
+    assert is_dialogue_concluded("Does that sound like a plan to you?") is False
+    assert is_dialogue_concluded("Are we all set?") is False
+    assert is_dialogue_concluded("Sounds like a plan. What do you think?") is False
+    assert is_dialogue_concluded("What do you think about the schema?") is False
+    assert is_dialogue_concluded("I checked the vault and found 3 notes.") is False
+
+
+async def test_continuous_dialogue_stops_when_concluded() -> None:
+    cfg = AppConfig()
+    cfg.bridge.max_discussion_turns = 10
+    tts = FakeTtsEngine()
+    player = FakeAudioPlayer()
+    feedback = FeedbackManager(enabled_sound=False, enabled_toast=False)
+    app = FridayApp(config=cfg, feedback=feedback, tts_engine=tts, audio_player=player)  # type: ignore[arg-type]
+
+    jarvis_replies = [
+        "I suggest using SQLite FTS5 for fast note indexing.",
+        "That covers everything, Friday. We're all set.",
+    ]
+    turn_counter = 0
+
+    def mock_post(url: str, payload: dict[str, Any], timeout_s: float = 45.0) -> dict[str, Any]:
+        nonlocal turn_counter
+        reply = jarvis_replies[min(turn_counter, len(jarvis_replies) - 1)]
+        turn_counter += 1
+        return {"ok": True, "reply": reply, "spoken": True}
+
+    async def mock_friday_turn(dialogue_history: list[dict[str, str]], raw_topic: str, turn: int, max_turns: int) -> str:
+        return "Sounds great Jarvis, does it support snippet extraction?"
+
+    app.bridge._http_post = mock_post
+    app.bridge._generate_friday_dialogue_turn = mock_friday_turn  # type: ignore[method-assign]
+
+    res = await app.bridge.call_jarvis(
+        {"message": "Discuss note search architecture with Jarvis", "discuss": True}
+    )
+
+    assert res["status"] == "ok"
+    assert res["turns_completed"] == 2
+    assert "covers everything" in res["history"][-1]["content"]
+
+
+async def test_friday_bridge_handles_cancel_endpoint() -> None:
+    cfg = AppConfig()
+    cfg.bridge.friday_port = 18767
+    tts = FakeTtsEngine()
+    player = FakeAudioPlayer()
+    feedback = FeedbackManager(enabled_sound=False, enabled_toast=False)
+    app = FridayApp(config=cfg, feedback=feedback, tts_engine=tts, audio_player=player)  # type: ignore[arg-type]
+
+    app.bridge._dialogue_active = True
+    await app.bridge.start()
+    try:
+        from friday.bridge import _http_post_json
+        import asyncio
+
+        resp = await asyncio.to_thread(
+            _http_post_json,
+            "http://127.0.0.1:18767/api/cancel",
+            {"source": "jarvis"},
+            5.0,
+        )
+        assert resp["status"] == "cancelled"
+        assert resp["assistant"] == "friday"
+        assert app.bridge._dialogue_cancelled is True
+        assert app.bridge._dialogue_active is False
+    finally:
+        await app.bridge.stop()

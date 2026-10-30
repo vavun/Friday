@@ -152,6 +152,7 @@ class BridgeConfig(BaseModel):
     jarvis_url: str = "http://127.0.0.1:8765"
     jarvis_voice: str = "en-US-ChristopherNeural"
     timeout_s: float = Field(default=45.0, gt=1.0, le=180.0)
+    max_discussion_turns: int = Field(default=10, ge=1, le=50)
 
 
 class SecretsConfig(BaseModel):
