@@ -745,7 +745,32 @@ def match_fast_rule(
     if not norm:
         return None
 
-    # 0. Перевіряємо збережені пайплайни та користувацькі навички
+    # 0. Greetings
+    clean_norm = norm.replace(",", "").replace(".", "").strip()
+    if clean_norm in {
+        "привіт",
+        "привіт friday",
+        "привіт фрайдей",
+        "добрий день",
+        "добрий ранок",
+        "добрий вечір",
+        "вітання",
+        "вітаю",
+        "hello",
+        "hello friday",
+        "hi",
+        "hi friday",
+        "hey friday",
+        "friday",
+        "фрайдей",
+    }:
+        return CommandIntent(
+            skill="clarify",
+            args={"question": "Hello! How can I help you?"},
+            confidence=1.0,
+        )
+
+    # 0.5. Перевіряємо збережені пайплайни та користувацькі навички
     saved_hit = _match_saved_pipeline_or_skill(norm, saved_pipelines, saved_skills)
     if saved_hit is not None:
         return saved_hit

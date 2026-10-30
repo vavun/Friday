@@ -112,21 +112,21 @@ def should_require_confirmation(
 
 
 def build_confirmation_prompt(skill: str, args: dict[str, Any]) -> str:
-    """Формує зрозумілий рядок підтвердження (Enter / Esc) для користувача."""
+    """Format user-facing confirmation prompt for dangerous actions."""
     if skill == "telegram.send":
         contact = str(args.get("contact", "")).strip().capitalize()
         text = str(args.get("text", "")).strip()
-        return f'{contact}: "{text}" — відправити? (Enter / Esc)'
+        return f'{contact}: "{text}" — send? (Enter / Esc)'
     if skill == "agent.run":
         prompt = str(args.get("prompt", "")).strip()[:80]
-        return f'Antigravity CLI: "{prompt}" — запустити сесію? (Enter / Esc)'
+        return f'Antigravity CLI: "{prompt}" — start session? (Enter / Esc)'
     if skill == "skill.create":
-        name = str(args.get("name") or args.get("trigger") or "нова навичка").strip()
+        name = str(args.get("name") or args.get("trigger") or "skill").strip()
         action_type = str(args.get("action_type", "command")).strip()
         cmd = str(args.get("command") or args.get("description") or "").strip()[:70]
-        return f'Зберегти та виконати нову навичку "{name}" [{action_type}: {cmd}]? (Enter / Esc)'
+        return f'Save and run skill "{name}" [{action_type}: {cmd}]? (Enter / Esc)'
     if skill == "pipeline.save":
-        name = str(args.get("name") or args.get("trigger") or "пайплайн").strip()
+        name = str(args.get("name") or args.get("trigger") or "pipeline").strip()
         steps_count = len(args.get("steps", [])) if isinstance(args.get("steps"), list) else 0
-        return f'Зберегти пайплайн "{name}" ({steps_count} кроків)? (Enter / Esc)'
-    return f"{skill}: {args} — виконати? (Enter / Esc)"
+        return f'Save pipeline "{name}" ({steps_count} steps)? (Enter / Esc)'
+    return f"{skill}: {args} — execute? (Enter / Esc)"

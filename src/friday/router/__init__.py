@@ -36,7 +36,7 @@ class CommandRouter:
             self.last_route_source = "noise"
             return CommandIntent(
                 skill="clarify",
-                args={"question": "Фраза занадто коротка або схожа на шум. Повторіть команду."},
+                args={"question": "The phrase is too short. Please repeat the command."},
                 confidence=0.0,
             )
 

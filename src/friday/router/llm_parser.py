@@ -24,18 +24,20 @@ from friday.util.timing import measure_time
 
 log = logging.getLogger("friday.router.llm")
 
-SYSTEM_PROMPT_TEMPLATE = """Ти — парсер голосових команд та планувальник пайплайнів для асистента FRIDAY на Windows. Користувач говорить українською.
-Перетвори команду на ОДИН JSON-об'єкт за схемою {{ "skill": "...", "args": {{...}}, "confidence": 0.0..1.0, "needs_confirm": true|false, "steps": [...] }}.
-Відповідай ТІЛЬКИ JSON, без пояснень і без markdown.
-Допустимі skill: window.move, window.resize, window.focus, gesture.drag, app.launch, app.discover, web.search,
+SYSTEM_PROMPT_TEMPLATE = """You are the command parser and pipeline planner for the FRIDAY voice assistant on Windows.
+The user speaks in Ukrainian or English, but FRIDAY ALWAYS RESPONDS AND ASKS QUESTIONS STRICTLY IN ENGLISH.
+Convert the command into ONE JSON object according to the schema:
+{{ "skill": "...", "args": {{...}}, "confidence": 0.0..1.0, "needs_confirm": true|false, "steps": [...] }}.
+Respond with ONLY JSON, without explanations and without markdown.
+Allowed skills: window.move, window.resize, window.focus, gesture.drag, app.launch, app.discover, web.search,
 docs.lookup, text.type, telegram.send, agent.run, file.create, file.open, pipeline.save, skill.create, skill.run, clarify.
-Якщо команда складається з кількох дій — додай список кроків у поле "steps": [{{"skill": "...", "args": {{...}}}}].
-У кроках window.move / window.resize / window.focus після відкриття програми вказуй у args.target канонічну назву цієї програми.
-Якщо користувач просить відкрити нову програму, якої немає у списку ({APPS_LIST}) — використай "app.discover" (якщо це реальна програма) або "clarify".
-Якщо користувач просить зберегти новий сценарій/пайплайн — використай "pipeline.save".
-Якщо користувач просить створити нову функцію/навичку — використай "skill.create" з needs_confirm = true.
-Якщо команда неоднозначна — skill = "clarify" з полем args.question.
-Дії, що надсилають повідомлення, запускають агента або створюють нові навички, мають needs_confirm = true."""
+If the command consists of multiple actions — provide the list of steps in the "steps" field: [{{"skill": "...", "args": {{...}}}}].
+In window.move / window.resize / window.focus steps after launching an app, set args.target to the canonical English name of that app.
+If the user asks to launch an app not in ({APPS_LIST}) — use "app.discover" (if it's a real app) or "clarify".
+If the user asks to save a new pipeline/routine — use "pipeline.save".
+If the user asks to create a new custom skill — use "skill.create" with needs_confirm = true.
+If the command is ambiguous, conversational, a greeting, or requires clarification — set skill = "clarify" with field args.question ALWAYS STRICTLY IN ENGLISH (e.g. "Hello! How can I help you?", "Which monitor would you like me to move this to?").
+Actions that send messages, run agents, or create skills must have needs_confirm = true."""
 
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 _FENCED_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
@@ -224,7 +226,7 @@ class LlmCommandParser:
             if resolved_step is None:
                 return CommandIntent(
                     skill="clarify",
-                    args={"question": f"Програма «{raw_name}» відсутня у білому списку дозволених програм."},
+                    args={"question": f"Application '{raw_name}' is not in the allowed apps whitelist."},
                     confidence=intent.confidence,
                     needs_confirm=False,
                 )
@@ -275,7 +277,7 @@ class LlmCommandParser:
             )
             return CommandIntent(
                 skill="clarify",
-                args={"question": f"Команда нечітка («{raw_text}»). Уточніть, що саме потрібно зробити?"},
+                args={"question": f"Command is ambiguous ('{raw_text}'). Could you please clarify?"},
                 confidence=intent.confidence,
                 needs_confirm=False,
             )
@@ -306,7 +308,7 @@ class LlmCommandParser:
         if not cleaned_text:
             return CommandIntent(
                 skill="clarify",
-                args={"question": "Команда порожня. Повторіть, будь ласка."},
+                args={"question": "Command is empty. Please speak again."},
                 confidence=0.0,
             )
 
@@ -345,7 +347,7 @@ class LlmCommandParser:
 
         return CommandIntent(
             skill="clarify",
-            args={"question": "Не вдалося однозначно розпізнати команду. Повторіть, будь ласка."},
+            args={"question": "Could not recognize the command. Please repeat."},
             confidence=0.0,
             needs_confirm=False,
         )

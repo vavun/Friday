@@ -776,7 +776,7 @@ class ClefToolPlanner:
 
         prompt = (
             "Ти — інтелектуальне ядро та планувальник пайплайнів голосового асистента FRIDAY для Windows (модель Clef). "
-            "Користувач віддає команди українською або англійською.\n"
+            "Користувач віддає команди українською або англійською, але FRIDAY ЗАВЖДИ ВІДПОВІДАЄ ТА ЗАПИТУЄ ВИКЛЮЧНО АНГЛІЙСЬКОЮ МОВОЮ (ALL RESPONSES AND QUESTIONS MUST BE STRICTLY IN ENGLISH).\n"
             "Правила маршрутизації та генерації пайплайнів:\n"
             f"1. Дозволені програми у [apps]: {', '.join(apps_keys)} (синоніми: {syn_str}).\n"
             "2. Якщо користувач просить відкрити/запустити програму, якої ще немає у [apps] — "
@@ -859,7 +859,7 @@ class ClefToolPlanner:
         if not intents:
             return CommandIntent(
                 skill="clarify",
-                args={"question": "Не вдалося сформувати кроки команди. Повторіть, будь ласка."},
+                args={"question": "Could not determine command steps. Please repeat."},
                 confidence=0.0,
             )
 

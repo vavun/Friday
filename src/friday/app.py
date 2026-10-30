@@ -349,8 +349,8 @@ class FridayApp:
         if not started:
             self.transition(AssistantState.IDLE)
             await self.feedback.notify(
-                "Помилка мікрофона",
-                "Не вдалося розпочати запис із мікрофона. Перевірте аудіопристрій.",
+                "Microphone error",
+                "Failed to start recording from microphone. Check your audio device.",
             )
 
     async def _on_voice_release(self, event: HotkeyEvent) -> None:
@@ -379,7 +379,7 @@ class FridayApp:
         except Exception as exc:
             log.exception("Помилка розпізнавання мовлення (STT): %s", exc)
             self.transition(AssistantState.IDLE)
-            await self.feedback.notify("Помилка STT", str(exc))
+            await self.feedback.notify("STT error", str(exc))
             self._speak_nowait("Sorry, could not recognize that.")
             return
 
@@ -402,9 +402,9 @@ class FridayApp:
 
         if intent.skill == "clarify":
             question = str(intent.args.get("question", "Could you clarify the command, please?"))
-            log.info("❓ Потрібне уточнення: %s", question)
+            log.info("❓ Clarification needed: %s", question)
             self.transition(AssistantState.IDLE)
-            await self.feedback.notify("Уточніть команду", question)
+            await self.feedback.notify("Clarify command", question)
             self._speak_nowait(question)
             return
 
@@ -423,7 +423,7 @@ class FridayApp:
             self.transition(AssistantState.CONFIRMING)
             prompt_msg = build_confirmation_prompt(needs_confirm_step.skill, needs_confirm_step.args)
             await self.feedback.notify(
-                "Підтвердіть дію (Enter / Esc)",
+                "Confirm action (Enter / Esc)",
                 prompt_msg,
             )
             spoken = build_spoken_confirmation(needs_confirm_step.skill, needs_confirm_step.args)
