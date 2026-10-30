@@ -2,7 +2,12 @@ import asyncio
 
 import pytest
 
-from friday.app import AssistantState, FridayApp, build_spoken_confirmation
+from friday.app import (
+    AssistantState,
+    FridayApp,
+    build_execution_confirmation,
+    build_spoken_confirmation,
+)
 from friday.config import AppConfig, TtsConfig
 from friday.hotkeys import HotkeyEvent, HotkeyEventType
 from friday.router import CommandIntent
@@ -94,6 +99,15 @@ def test_spoken_confirmation_prompts() -> None:
     assert build_spoken_confirmation("custom.action", {}) == "Confirm custom.action?"
 
 
+def test_execution_confirmation_prompts() -> None:
+    assert build_execution_confirmation("telegram.send", {}) == "Message sent."
+    assert build_execution_confirmation("agent.run", {}) == "Agent session started."
+    assert build_execution_confirmation("skill.create", {}) == "Skill created."
+    assert build_execution_confirmation("pipeline.save", {}) == "Pipeline saved."
+    assert build_execution_confirmation("other", {"reply": "Custom reply"}) == "Custom reply"
+    assert build_execution_confirmation("window.move", {}) is None
+
+
 @pytest.mark.asyncio
 async def test_app_speak_and_playback_loop() -> None:
     tts = MockTtsEngine()
@@ -148,6 +162,25 @@ async def test_app_voice_confirm_and_cancel_feedback() -> None:
     assert app.state == AssistantState.IDLE
     await asyncio.sleep(0.02)
     assert "Cancelled." in tts.spoken
+
+    # Enter confirmation and execution feedback
+    class _DummyTelegramSkill:
+        name = "telegram.send"
+
+        async def execute(self, _args: dict) -> dict:
+            return {"status": "sent"}
+
+    reg = SkillRegistry()
+    reg.register(_DummyTelegramSkill())
+    app.registry = reg
+
+    await app._route_and_dispatch("send telegram")
+    assert app.state == AssistantState.CONFIRMING
+    await app.handle_event(HotkeyEvent(type=HotkeyEventType.CONFIRM))
+    assert app.state == AssistantState.IDLE
+    await asyncio.sleep(0.02)
+    assert "Confirmed." in tts.spoken
+    assert "Message sent." in tts.spoken
 
 
 @pytest.mark.asyncio

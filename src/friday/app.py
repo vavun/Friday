@@ -48,6 +48,8 @@ from friday.tts import (
     TtsEngine,
     clear_queue,
     create_tts_engine,
+    sanitize_for_tts,
+    split_sentences,
 )
 
 log = logging.getLogger("friday.app")
@@ -78,6 +80,24 @@ def build_spoken_confirmation(skill: str, args: dict[str, Any]) -> str:
         name = str(args.get("name") or args.get("trigger") or "pipeline").strip()
         return f"Save pipeline {name}?"
     return f"Confirm {skill}?"
+
+
+def build_execution_confirmation(skill: str, result: Any) -> str | None:
+    """Spoken confirmation after successful execution."""
+    if skill == "telegram.send":
+        return "Message sent."
+    if skill == "agent.run":
+        return "Agent session started."
+    if skill == "skill.create":
+        return "Skill created."
+    if skill == "pipeline.save":
+        return "Pipeline saved."
+    if isinstance(result, dict):
+        if result.get("speak"):
+            return str(result["speak"])
+        if result.get("reply"):
+            return str(result["reply"])
+    return None
 
 
 class FridayApp:
@@ -245,14 +265,19 @@ class FridayApp:
         """Synthesize text and enqueue PCM audio."""
         if not self.config.tts.enabled or self.tts_engine is None:
             return
-        if not text or not text.strip():
+        clean = sanitize_for_tts(text)
+        if not clean:
             return
-        try:
-            pcm = await self.tts_engine.synthesize_pcm(text)
-            if pcm:
-                await self.audio_queue.put(pcm)
-        except Exception as exc:
-            log.warning("TTS synthesis failed: %s", exc)
+        sentences = split_sentences(clean)
+        for sent in sentences:
+            try:
+                pcm = await self.tts_engine.synthesize_pcm(sent)
+                if pcm:
+                    await self.audio_queue.put(pcm)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                log.warning("TTS synthesis failed: %s", exc)
 
     def _speak_nowait(self, text: str) -> asyncio.Task[None] | None:
         """Enqueue speech in background task."""
@@ -464,6 +489,10 @@ class FridayApp:
                                 await asyncio.sleep(0.25)
                     else:
                         res = await skill.execute(step.args)
+
+                    confirm_msg = build_execution_confirmation(step.skill, res)
+                    if confirm_msg:
+                        self._speak_nowait(confirm_msg)
 
                     if isinstance(res, dict) and res.get("app"):
                         last_app_key = str(res["app"]).strip().lower()
