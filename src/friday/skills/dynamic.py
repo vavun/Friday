@@ -262,7 +262,13 @@ class AppDiscoverSkill:
 
     async def execute(self, args: dict[str, Any]) -> dict[str, Any]:
         norm_args = normalize_skill_args("app.discover", args)
-        raw_name = str(norm_args.get("name") or norm_args.get("query") or "").strip()
+        raw_name = str(
+            norm_args.get("name")
+            or norm_args.get("query")
+            or norm_args.get("app_name")
+            or args.get("app_name")
+            or ""
+        ).strip()
         if not raw_name:
             raise ValueError("Не вказано назву програми для пошуку (args.name)")
 

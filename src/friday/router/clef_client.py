@@ -118,7 +118,7 @@ def normalize_skill_args(skill_name: str, raw_args: dict[str, Any]) -> dict[str,
 
     if skill_name in ("app.launch", "app.discover"):
         if "name" not in args:
-            for alt in ("app", "target", "application", "program", "query"):
+            for alt in ("app", "target", "application", "program", "query", "app_name"):
                 if alt in args and args[alt]:
                     args["name"] = args.pop(alt)
                     break

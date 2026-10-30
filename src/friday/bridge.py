@@ -208,17 +208,45 @@ class PeerBridgeService:
             await self._speak_as_jarvis(jarvis_reply)
 
         followup = ""
+        jarvis_followup_reply = ""
         if discuss and jarvis_reply:
             followup = await self._generate_friday_followup(friday_callout, jarvis_reply)
             if followup:
                 await self.app.feedback.notify("FRIDAY -> Jarvis", followup)
                 await self.app.speak_and_wait(followup)
 
+                # Transmit Friday's follow-up to Jarvis so Jarvis can execute any actions and reply
+                try:
+                    payload2 = {
+                        "sender": "friday",
+                        "message": followup,
+                        "raw_user_request": raw_message,
+                        "speak": True,
+                        "turn": 2,
+                    }
+                    resp2 = await asyncio.to_thread(
+                        self._http_post,
+                        url,
+                        payload2,
+                        self.config.bridge.timeout_s,
+                    )
+                    jarvis_followup_reply = str(resp2.get("reply", "")).strip()
+                    log.info("🤖 Jarvis replied to Friday follow-up: %s", jarvis_followup_reply)
+                except Exception as exc:
+                    log.info(
+                        "Jarvis bridge offline for follow-up (%s); using direct male-voice fallback",
+                        exc,
+                    )
+                    jarvis_followup_reply = await self._generate_jarvis_fallback_reply(followup)
+                    await self.app.feedback.notify("Jarvis -> FRIDAY", jarvis_followup_reply)
+                    await self._speak_as_jarvis(jarvis_followup_reply)
+
         return {
             "status": "ok",
             "friday_said": friday_callout,
             "jarvis_reply": jarvis_reply,
             "friday_followup": followup,
+            "jarvis_followup_reply": jarvis_followup_reply,
         }
 
     async def _speak_as_jarvis(self, text: str) -> None:
