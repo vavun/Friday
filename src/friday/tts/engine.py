@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Protocol
@@ -34,10 +35,14 @@ class EdgeTtsEngine:
         rate_pct = int((self.config.speed - 1.0) * 100)
         rate_str = f"{rate_pct:+d}%"
 
+        voice = self.config.voice
+        if re.search(r"[\u0400-\u04FF]", clean):
+            voice = getattr(self.config, "voice_uk", "uk-UA-PolinaNeural") or "uk-UA-PolinaNeural"
+
         try:
             import edge_tts
 
-            comm = edge_tts.Communicate(clean, voice=self.config.voice, rate=rate_str)
+            comm = edge_tts.Communicate(clean, voice=voice, rate=rate_str)
             chunks: list[bytes] = []
             async for chunk in comm.stream():
                 if chunk["type"] == "audio":
@@ -115,7 +120,6 @@ class KokoroTtsEngine:
                     clean,
                     voice=self.config.kokoro_voice,
                     speed=self.config.speed,
-                    lang="en-us",
                 )
                 if samples is None or len(samples) == 0:
                     return None

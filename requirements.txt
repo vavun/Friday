@@ -11,6 +11,7 @@ pyperclip>=1.8
 winotify>=1.1
 edge-tts>=7.0
 soundfile>=0.12
+kokoro-onnx>=0.4.0
 
 # Launcher UI (PySide6)
 PySide6>=6.7

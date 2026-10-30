@@ -15,7 +15,7 @@ language = "uk"
 model = "gemini-3.5-transcribe"
 
 [llm]
-backend = "clef"              # "clef" (Experiential Labs) | "gemini"
+backend = "gemini"              # "gemini" | "clef"
 model = "gemini-3.5-flash-lite"
 clef_model = "clef"
 clef_base_url = "https://api.experientiallabs.ai/v1"
@@ -24,11 +24,12 @@ clef_base_url = "https://api.experientiallabs.ai/v1"
 enabled = true
 engine = "edge"               # "edge" | "kokoro" | "off"
 voice = "en-US-AriaNeural"    # English female voice
+voice_uk = "uk-UA-PolinaNeural" # Ukrainian female voice
 speed = 1.0
 sample_rate = 24000
 kokoro_model_path = "C:/Users/Acer/Jarvis/kokoro-v1.0.onnx"
 kokoro_voices_path = "C:/Users/Acer/Jarvis/voices-v1.0.bin"
-kokoro_voice = "af_heart"     # English female voice (Kokoro fallback)
+kokoro_voice = "af_heart"     # Kokoro fallback voice
 
 [monitors]
 primary = 0

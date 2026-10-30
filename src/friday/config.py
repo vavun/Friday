@@ -59,11 +59,12 @@ class LlmConfig(BaseModel):
 
 
 class TtsConfig(BaseModel):
-    """English-only female TTS parameters (Edge-TTS primary, Kokoro fallback)."""
+    """Female TTS parameters (Edge-TTS primary, Kokoro fallback)."""
 
     enabled: bool = True
     engine: Literal["edge", "kokoro", "off"] = "edge"
     voice: str = "en-US-AriaNeural"
+    voice_uk: str = "uk-UA-PolinaNeural"
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     sample_rate: int = Field(default=24000, ge=8000, le=48000)
     kokoro_model_path: str = "C:/Users/Acer/Jarvis/kokoro-v1.0.onnx"

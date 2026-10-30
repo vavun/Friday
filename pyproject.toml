@@ -20,6 +20,7 @@ dependencies = [
     "winotify>=1.1",
     "edge-tts>=7.0",
     "soundfile>=0.12",
+    "kokoro-onnx>=0.4.0",
 ]
 
 [project.optional-dependencies]
