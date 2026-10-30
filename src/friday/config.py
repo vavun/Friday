@@ -40,12 +40,13 @@ class AudioConfig(BaseModel):
 
 
 class SttConfig(BaseModel):
-    """Параметри розпізнавання мовлення (STT)."""
+    """STT configuration."""
 
     backend: Literal["gemini", "whisper_local"] = "gemini"
     language: str = "uk"
-    model: str = "gemini-3.5-transcribe"
+    model: str = "gemini-3.5-flash-lite"
     mode: str = "VERBATIM"
+    timeout_s: float = Field(default=20.0, gt=1.0, le=60.0)
 
 
 class LlmConfig(BaseModel):

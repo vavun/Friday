@@ -12,7 +12,8 @@ tail_ms = 200                 # дописати після відпусканн
 [stt]
 backend = "gemini"            # "gemini" | "whisper_local"
 language = "uk"
-model = "gemini-3.5-transcribe"
+model = "gemini-3.5-flash-lite"
+timeout_s = 20.0
 
 [llm]
 backend = "gemini"              # "gemini" | "clef"
