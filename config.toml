@@ -63,3 +63,12 @@ swipe_distance = 0.22         # мін. зміщення за X для swipe (< 
 mirror = true                 # дзеркальне відображення осі X камери
 idle_timeout_s = 10.0         # авто-вимкнення камери при бездіяльності
 
+[bridge]
+enabled = true
+friday_host = "127.0.0.1"
+friday_port = 8766
+jarvis_url = "http://127.0.0.1:8765"
+jarvis_voice = "en-US-ChristopherNeural"
+timeout_s = 45.0
+
+

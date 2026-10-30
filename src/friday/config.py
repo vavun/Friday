@@ -143,6 +143,17 @@ class GestureConfig(BaseModel):
     min_confidence: float = Field(default=0.60, ge=0.1, le=1.0)
 
 
+class BridgeConfig(BaseModel):
+    """Jarvis-Friday bridge settings."""
+
+    enabled: bool = True
+    friday_host: str = "127.0.0.1"
+    friday_port: int = Field(default=8766, ge=1024, le=65535)
+    jarvis_url: str = "http://127.0.0.1:8765"
+    jarvis_voice: str = "en-US-ChristopherNeural"
+    timeout_s: float = Field(default=45.0, gt=1.0, le=180.0)
+
+
 class SecretsConfig(BaseModel):
     """Секретні ключі, завантажені з .env (не логуються)."""
 
@@ -177,6 +188,7 @@ class AppConfig(BaseModel):
     docs_sites: dict[str, str] = Field(default_factory=dict)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     gesture: GestureConfig = Field(default_factory=GestureConfig)
+    bridge: BridgeConfig = Field(default_factory=BridgeConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 
 

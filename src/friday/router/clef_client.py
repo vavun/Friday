@@ -33,6 +33,8 @@ TOOL_NAME_TO_SKILL: dict[str, str] = {
     "pipeline_run": "pipeline.execute",
     "skill_create": "skill.create",
     "skill_run": "skill.run",
+    "assistant_jarvis": "assistant.jarvis",
+    "ask_jarvis": "assistant.jarvis",
     "clarify": "clarify",
 }
 
@@ -241,6 +243,13 @@ def normalize_skill_args(skill_name: str, raw_args: dict[str, Any]) -> dict[str,
             for alt in ("trigger", "pipeline", "skill_name", "target"):
                 if alt in args and args[alt]:
                     args["name"] = args.pop(alt)
+                    break
+
+    elif skill_name == "assistant.jarvis":
+        if "message" not in args:
+            for alt in ("prompt", "query", "text", "task", "question"):
+                if alt in args and args[alt]:
+                    args["message"] = args.pop(alt)
                     break
 
     return args

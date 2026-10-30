@@ -9,6 +9,7 @@ from enum import StrEnum
 from typing import Any, Callable
 
 from friday.audio import AudioRecorder
+from friday.bridge import JarvisBridgeSkill, PeerBridgeService
 from friday.config import AppConfig
 from friday.feedback import FeedbackManager
 from friday.gesture.controller import GestureDragSkill, GestureRuntimeController
@@ -84,6 +85,8 @@ def build_spoken_confirmation(skill: str, args: dict[str, Any]) -> str:
 
 def build_execution_confirmation(skill: str, result: Any) -> str | None:
     """Spoken confirmation after successful execution."""
+    if skill == "assistant.jarvis":
+        return None
     if skill == "telegram.send":
         return "Message sent."
     if skill == "agent.run":
@@ -126,7 +129,10 @@ class FridayApp:
         self.transcriber: Transcriber = transcriber or create_transcriber(config)
         self.router: CommandRouter = router or CommandRouter(config=config)
         self.gesture_controller = gesture_controller
+        self.bridge = PeerBridgeService(self)
         self.registry: SkillRegistry = registry or self._build_default_registry()
+        if self.registry.get("assistant.jarvis") is None:
+            self.registry.register(JarvisBridgeSkill(self.bridge))
         self._listener_factory = listener_factory
         self._hotkey_listener: HotkeyListener | None = None
         self._last_audio: bytes | None = None
@@ -289,6 +295,54 @@ class FridayApp:
             task.add_done_callback(self._speak_tasks.discard)
             return task
         return None
+
+    async def wait_for_audio(self) -> None:
+        """Wait until queued TTS audio finishes playing."""
+        if self._playback_task is not None and not self._playback_task.done():
+            await self.audio_queue.join()
+        elif self.audio_player is not None:
+            while not self.audio_queue.empty():
+                try:
+                    chunk = self.audio_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                try:
+                    if chunk is not None:
+                        await asyncio.to_thread(self.audio_player.play_audio, chunk)
+                finally:
+                    self.audio_queue.task_done()
+
+    async def speak_and_wait(self, text: str) -> None:
+        """Synthesize text and wait for playback completion."""
+        await self.speak(text)
+        await self.wait_for_audio()
+
+    async def execute_intent_from_peer(self, intent: CommandIntent) -> str:
+        """Execute non-recursive desktop skills requested by Jarvis."""
+        steps = [s for s in (intent.steps or [intent]) if s.skill not in ("clarify", "assistant.jarvis")]
+        for step in steps:
+            validate_intent_safety(step.skill, step.args)
+        risky = next(
+            (s for s in steps if should_require_confirmation(s.skill, s.needs_confirm, self.config.safety)),
+            None,
+        )
+        if risky is not None:
+            self._pending_intent = intent
+            self.transition(AssistantState.CONFIRMING)
+            await self.feedback.notify(
+                "Jarvis request: confirm (Enter / Esc)",
+                build_confirmation_prompt(risky.skill, risky.args),
+            )
+            return "I need the user to confirm that first."
+        executed: list[str] = []
+        for step in steps:
+            skill = self.registry.get(step.skill)
+            if skill is not None:
+                await skill.execute(step.args)
+                executed.append(step.skill.replace(".", " "))
+        if executed:
+            return f"I completed {', '.join(executed)}."
+        return "I completed that action."
 
     async def _playback_loop(self) -> None:
         """Play audio chunks sequentially from queue."""
@@ -612,6 +666,7 @@ class FridayApp:
         if self.config.tts.enabled and self.config.tts.engine != "off":
             playback_task = asyncio.create_task(self._playback_loop())
             self._playback_task = playback_task
+        await self.bridge.start()
         try:
             while not self._stop_event.is_set():
                 try:
@@ -628,6 +683,7 @@ class FridayApp:
         except asyncio.CancelledError:
             log.info("Отримано сигнал скасування.")
         finally:
+            await self.bridge.stop()
             if warmup_task is not None and not warmup_task.done():
                 warmup_task.cancel()
             for t in list(self._speak_tasks):

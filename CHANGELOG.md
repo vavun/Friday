@@ -1,5 +1,20 @@
 # CHANGELOG — FRIDAY
 
+## [1.4.0] — Jarvis <-> FRIDAY bridge (2026-10-31)
+
+### Added
+- `friday.bridge`: HTTP server on `127.0.0.1:8766` (`POST /api/assist`, `GET /api/health`) + client to Jarvis on `:8765`.
+- Skill `assistant.jarvis`: FRIDAY speaks to Jarvis, Jarvis replies in his male voice; `discuss` mode adds a FRIDAY follow-up.
+- Offline fallback: if Jarvis isn't running, FRIDAY generates his reply and speaks it with `en-US-ChristopherNeural`.
+- `[bridge]` section in `config.toml`. Jarvis PTT moved to `Right Alt` (FRIDAY stays on `Right Ctrl`).
+
+### Security
+- Jarvis requests go through `validate_intent_safety`; risky skills (Telegram, agent, skill.create) still require Enter/Esc confirmation.
+- Jarvis cannot call FRIDAY back while answering her (loop guard).
+
+### Fixed
+- STT: `gemini-3.5-flash-lite` default, 20s timeout with fallback.
+
 ## [1.3.0] — Інтеграція моделі Clef (Experiential Labs), генерація пайплайнів, авто-навчання та оптимізації (2026-10-30)
 
 ### Додано

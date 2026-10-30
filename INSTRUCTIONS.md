@@ -78,6 +78,12 @@
   - Пайплайн зберігається у `[pipelines]` файлу `config.local.toml`.
   - Надалі фраза *«Запусти робочий ранок»* розпізнається детерміновано через Fast Path і послідовно виконує всі кроки із протягуванням контексту активних вікон!
 
+### 1.11 Partner assistant Jarvis (`assistant.jarvis`)
+- FRIDAY (`Right Ctrl`, female voice) and Jarvis (`Right Alt`, male voice) run as separate processes and talk over localhost HTTP: FRIDAY `:8766`, Jarvis `:8765` (`[bridge]` in `config.toml`).
+- Examples: *"Ask Jarvis what's in my vault"*, *"Поговори з Джарвісом про архітектуру"* (discuss mode → FRIDAY adds a follow-up).
+- Jarvis can call FRIDAY via his `ask_friday` tool (window/monitor/gesture/Telegram tasks). Risky actions still need Enter/Esc on FRIDAY's side.
+- If the other assistant isn't running, the caller simulates its reply in that assistant's voice.
+
 ---
 
 ## 2. Приклади голосових команд та сценаріїв

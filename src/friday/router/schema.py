@@ -23,6 +23,7 @@ SkillName = Literal[
     "pipeline.save",
     "skill.create",
     "skill.run",
+    "assistant.jarvis",
     "clarify",
 ]
 

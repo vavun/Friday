@@ -770,6 +770,29 @@ def match_fast_rule(
             confidence=1.0,
         )
 
+    # 0.2. Partner assistant Jarvis
+    jarvis_re = r"(jarvis|джарвіс\w*)"
+    talk_verbs = (
+        r"(ask|tell|call|talk|discuss|chat|collaborate|consult|"
+        r"попроси\w*|спитай\w*|запитай\w*|скажи|поклич\w*|поговор\w*|обговор\w*|поспілкуй\w*|порадь\w*)"
+    )
+    if re.match(rf"^\s*(hey\s+|ей\s+)?{jarvis_re}\b", norm, re.IGNORECASE) or re.search(
+        rf"\b{talk_verbs}\b.*\b{jarvis_re}\b", norm, re.IGNORECASE
+    ):
+        discuss = bool(
+            re.search(
+                r"\b(discuss|talk|chat|collaborate|обговор\w*|поговор\w*|поспілкуй\w*)\b",
+                norm,
+                re.IGNORECASE,
+            )
+        )
+        return CommandIntent(
+            skill="assistant.jarvis",
+            args={"message": orig, "discuss": discuss},
+            confidence=0.98,
+            needs_confirm=False,
+        )
+
     # 0.5. Перевіряємо збережені пайплайни та користувацькі навички
     saved_hit = _match_saved_pipeline_or_skill(norm, saved_pipelines, saved_skills)
     if saved_hit is not None:
