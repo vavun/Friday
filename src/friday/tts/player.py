@@ -57,6 +57,16 @@ class AudioPlayer:
             if not self._closed:
                 self._stream.write(frames)
 
+    def abort(self) -> None:
+        """Reset stream playback."""
+        with self._lock:
+            if not self._closed:
+                try:
+                    self._stream.stop()
+                    self._stream.start()
+                except Exception:
+                    pass
+
     def close(self) -> None:
         with self._lock:
             if not self._closed:

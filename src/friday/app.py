@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from enum import StrEnum
-from typing import Callable
+from typing import Any, Callable
 
 from friday.audio import AudioRecorder
 from friday.config import AppConfig
@@ -43,6 +43,12 @@ from friday.skills.windows import (
     WindowResizeSkill,
 )
 from friday.stt import GeminiTranscriber, Transcriber, WhisperLocalTranscriber, create_transcriber
+from friday.tts import (
+    AudioPlayer,
+    TtsEngine,
+    clear_queue,
+    create_tts_engine,
+)
 
 log = logging.getLogger("friday.app")
 
@@ -58,8 +64,24 @@ class AssistantState(StrEnum):
     EXECUTING = "EXECUTING"
 
 
+def build_spoken_confirmation(skill: str, args: dict[str, Any]) -> str:
+    """English confirmation prompt for TTS."""
+    if skill == "telegram.send":
+        contact = str(args.get("contact", "")).strip()
+        return f"Send message to {contact}?" if contact else "Send this message?"
+    if skill == "agent.run":
+        return "Start agent session?"
+    if skill == "skill.create":
+        name = str(args.get("name") or args.get("trigger") or "skill").strip()
+        return f"Create and run skill {name}?"
+    if skill == "pipeline.save":
+        name = str(args.get("name") or args.get("trigger") or "pipeline").strip()
+        return f"Save pipeline {name}?"
+    return f"Confirm {skill}?"
+
+
 class FridayApp:
-    """Головний клас асистента, що керує станами, хоткеями, записом звуку та STT."""
+    """Assistant state machine and orchestration."""
 
     def __init__(
         self,
@@ -71,6 +93,8 @@ class FridayApp:
         registry: SkillRegistry | None = None,
         gesture_controller: GestureRuntimeController | None = None,
         listener_factory: Callable[..., HotkeyListener] | None = None,
+        tts_engine: TtsEngine | None = None,
+        audio_player: AudioPlayer | None = None,
     ) -> None:
         self.config = config
         self._state: AssistantState = AssistantState.IDLE
@@ -89,6 +113,17 @@ class FridayApp:
         self._last_transcript: str = ""
         self._last_intent: CommandIntent | None = None
         self._pending_intent: CommandIntent | None = None
+
+        self.audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=64)
+        self.audio_player: AudioPlayer | None = audio_player
+        if tts_engine is not None:
+            self.tts_engine: TtsEngine | None = tts_engine
+        elif self.config.tts.enabled and self.config.tts.engine != "off":
+            self.tts_engine = create_tts_engine(self.config.tts)
+        else:
+            self.tts_engine = None
+        self._playback_task: asyncio.Task[None] | None = None
+        self._speak_tasks: set[asyncio.Task[None]] = set()
 
     def _build_default_registry(self) -> SkillRegistry:
         """Реєструє всі навички ядра FRIDAY (Етапи 3–8)."""
@@ -206,6 +241,58 @@ class FridayApp:
         elif event.type == HotkeyEventType.EXPLAIN_CLIPBOARD:
             await self._on_explain_clipboard()
 
+    async def speak(self, text: str) -> None:
+        """Synthesize text and enqueue PCM audio."""
+        if not self.config.tts.enabled or self.tts_engine is None:
+            return
+        if not text or not text.strip():
+            return
+        try:
+            pcm = await self.tts_engine.synthesize_pcm(text)
+            if pcm:
+                await self.audio_queue.put(pcm)
+        except Exception as exc:
+            log.warning("TTS synthesis failed: %s", exc)
+
+    def _speak_nowait(self, text: str) -> asyncio.Task[None] | None:
+        """Enqueue speech in background task."""
+        if not self.config.tts.enabled or self.tts_engine is None:
+            return None
+        if (self._playback_task is not None and not self._playback_task.done()) or self.audio_player is not None:
+            task = asyncio.create_task(self.speak(text))
+            self._speak_tasks.add(task)
+            task.add_done_callback(self._speak_tasks.discard)
+            return task
+        return None
+
+    async def _playback_loop(self) -> None:
+        """Play audio chunks sequentially from queue."""
+        if self.audio_player is None and self.config.tts.enabled and self.config.tts.engine != "off":
+            try:
+                self.audio_player = AudioPlayer(sample_rate=self.config.tts.sample_rate)
+            except Exception as exc:
+                log.warning("Audio player initialization failed: %s", exc)
+
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    chunk = await asyncio.wait_for(self.audio_queue.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+                if chunk is None:
+                    break
+                try:
+                    if self.audio_player is not None:
+                        await asyncio.to_thread(self.audio_player.play_audio, chunk)
+                except Exception:
+                    log.exception("Audio playback error")
+                finally:
+                    self.audio_queue.task_done()
+        finally:
+            if self.audio_player is not None:
+                await asyncio.to_thread(self.audio_player.close)
+                self.audio_player = None
+
     async def _on_explain_clipboard(self) -> None:
         """Миттєво відкриває документацію по помилці з буфера обміну на моніторі docs (Етап 6)."""
         intent = CommandIntent(
@@ -218,7 +305,16 @@ class FridayApp:
         await self._execute_intent(intent)
 
     async def _on_voice_press(self, event: HotkeyEvent) -> None:
-        """Старт запису по утриманню клавіші (без звукового сигналу)."""
+        """Start recording on voice hotkey."""
+        # Barge-in: cancel speaking tasks and drain audio
+        for t in list(self._speak_tasks):
+            if not t.done():
+                t.cancel()
+        self._speak_tasks.clear()
+        clear_queue(self.audio_queue)
+        if self.audio_player is not None:
+            self.audio_player.abort()
+
         if self._state == AssistantState.LISTENING:
             return
         self.transition(AssistantState.LISTENING)
@@ -233,7 +329,7 @@ class FridayApp:
             )
 
     async def _on_voice_release(self, event: HotkeyEvent) -> None:
-        """Дозапис tail_ms після відпускання клавіші, зупинка запису, STT, роутинг та виконання."""
+        """Finish recording and transcribe speech."""
         if self._state != AssistantState.LISTENING:
             return
 
@@ -259,6 +355,7 @@ class FridayApp:
             log.exception("Помилка розпізнавання мовлення (STT): %s", exc)
             self.transition(AssistantState.IDLE)
             await self.feedback.notify("Помилка STT", str(exc))
+            self._speak_nowait("Sorry, could not recognize that.")
             return
 
         release_to_text_ms = (time.perf_counter() - release_t0) * 1000.0
@@ -273,19 +370,20 @@ class FridayApp:
         await self._route_and_dispatch(self._last_transcript)
 
     async def _route_and_dispatch(self, text: str) -> None:
-        """Маршрутизує розпізнаний текст і передає команду на виконання або підтвердження."""
+        """Route recognized text and dispatch action."""
         self.transition(AssistantState.ROUTING)
         intent = await self.router.route(text)
         self._last_intent = intent
 
         if intent.skill == "clarify":
-            question = str(intent.args.get("question", "Уточніть команду, будь ласка."))
+            question = str(intent.args.get("question", "Could you clarify the command, please?"))
             log.info("❓ Потрібне уточнення: %s", question)
             self.transition(AssistantState.IDLE)
             await self.feedback.notify("Уточніть команду", question)
+            self._speak_nowait(question)
             return
 
-        # Перевірка навичок, що вимагають підтвердження (як одиночних, так і у складі ланцюжка)
+        # Check safety confirmation requirements
         all_steps = intent.steps if intent.steps else [intent]
         needs_confirm_step = next(
             (
@@ -303,12 +401,14 @@ class FridayApp:
                 "Підтвердіть дію (Enter / Esc)",
                 prompt_msg,
             )
+            spoken = build_spoken_confirmation(needs_confirm_step.skill, needs_confirm_step.args)
+            self._speak_nowait(spoken)
             return
 
         await self._execute_intent(intent)
 
     async def _on_confirm(self) -> None:
-        """Підтвердження очікуваної ризикової дії клавішею Enter."""
+        """Confirm pending action on Enter."""
         if self._state != AssistantState.CONFIRMING or self._pending_intent is None:
             return
         intent = self._pending_intent
@@ -317,6 +417,7 @@ class FridayApp:
         if intent.steps:
             for s in intent.steps:
                 s.args["_confirmed"] = True
+        self._speak_nowait("Confirmed.")
         await self._execute_intent(intent)
 
     async def _execute_intent(self, intent: CommandIntent) -> None:
@@ -389,6 +490,7 @@ class FridayApp:
         except Exception as exc:
             log.exception("Помилка виконання навички %s: %s", intent.skill, exc)
             await self.feedback.notify(f"Помилка {intent.skill}", str(exc))
+            self._speak_nowait(f"Error executing {intent.skill}.")
         finally:
             self.transition(AssistantState.IDLE)
 
@@ -415,7 +517,15 @@ class FridayApp:
         pass
 
     async def _on_cancel(self) -> None:
-        """Скасування запису, перетягування вікна або поточної дії по Esc."""
+        """Cancel current operation on Esc."""
+        for t in list(self._speak_tasks):
+            if not t.done():
+                t.cancel()
+        self._speak_tasks.clear()
+        clear_queue(self.audio_queue)
+        if self.audio_player is not None:
+            self.audio_player.abort()
+
         if self.gesture_controller is not None and self.gesture_controller.is_running:
             await asyncio.to_thread(self.gesture_controller.stop, True)
         elif self.gesture_controller is not None and self.gesture_controller.mover.active_session is not None:
@@ -423,10 +533,13 @@ class FridayApp:
 
         if self.recorder.recording:
             await asyncio.to_thread(self.recorder.stop)
+        was_confirming = self._state == AssistantState.CONFIRMING
         self._pending_intent = None
         if self._state != AssistantState.IDLE:
             log.info("Дію скасовано користувачем (Esc).")
             self.transition(AssistantState.IDLE)
+            if was_confirming:
+                self._speak_nowait("Cancelled.")
 
     async def _safe_warmup_whisper(self) -> None:
         """Безпечний прогрів Faster-Whisper без падіння основного процесу при помилці завантаження."""
@@ -445,7 +558,7 @@ class FridayApp:
                 )
 
     async def run(self, once: bool = False) -> None:
-        """Запускає прогрів STT (для whisper_local), слухач клавіш та цикл обробки подій."""
+        """Run STT warmup, hotkey listener, audio playback and event loop."""
         log.info(
             "FRIDAY запущено (стан=%s, stt=%s, hotkey=%s)",
             self._state.value,
@@ -466,6 +579,10 @@ class FridayApp:
         warmup_task: asyncio.Task[None] | None = None
         if isinstance(self.transcriber, WhisperLocalTranscriber):
             warmup_task = asyncio.create_task(self._safe_warmup_whisper())
+        playback_task: asyncio.Task[None] | None = None
+        if self.config.tts.enabled and self.config.tts.engine != "off":
+            playback_task = asyncio.create_task(self._playback_loop())
+            self._playback_task = playback_task
         try:
             while not self._stop_event.is_set():
                 try:
@@ -484,6 +601,18 @@ class FridayApp:
         finally:
             if warmup_task is not None and not warmup_task.done():
                 warmup_task.cancel()
+            for t in list(self._speak_tasks):
+                if not t.done():
+                    t.cancel()
+            self._speak_tasks.clear()
+            clear_queue(self.audio_queue)
+            await self.audio_queue.put(None)
+            if playback_task is not None and not playback_task.done():
+                try:
+                    await asyncio.wait_for(playback_task, timeout=1.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    playback_task.cancel()
+            self._playback_task = None
             if self._hotkey_listener is not None:
                 self._hotkey_listener.stop()
             if self.gesture_controller is not None and self.gesture_controller.is_running:
